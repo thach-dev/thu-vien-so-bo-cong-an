@@ -1,15 +1,23 @@
 const express = require("express");
+const cors = require("cors");
+
 const app = express();
+
+// ACCEPT ALL CORS
+app.use(cors());
 
 app.use(express.json());
 
-// Import routes
-const routes = require("./routes/index"); // hoặc require("./routes")
+const authRoutes = require("./routes/auth");
 
-// Mount với tiền tố /api
-app.use("/api", routes);
+app.use("/api/auth", authRoutes);
 
-// Route xử lý lỗi 404 nếu không khớp URL nào
+app.get("/", (req, res) => {
+  res.status(200).json({
+    message: "Backend is running"
+  });
+});
+
 app.use((req, res) => {
   res.status(404).json({
     message: "API không tồn tại",
