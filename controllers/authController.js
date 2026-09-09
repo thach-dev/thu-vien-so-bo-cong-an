@@ -10,9 +10,6 @@ const register = async (req, res) => {
 
     const { username, password } = req.body;
 
-    // ----------------------------
-    // Kiểm tra dữ liệu
-    // ----------------------------
     if (!username || !password) {
       return res.status(400).json({
         message: "Username và password không được để trống"
@@ -27,9 +24,13 @@ const register = async (req, res) => {
       });
     }
 
-    // ----------------------------
-    // Kiểm tra username tồn tại
-    // ----------------------------
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: "Password phải có ít nhất 6 ký tự"
+      });
+    }
+
+    // Kiểm tra username đã tồn tại
     const {
       data: existingUser,
       error: checkError
@@ -47,33 +48,24 @@ const register = async (req, res) => {
 
       return res.status(500).json({
         message: "Lỗi kiểm tra tài khoản",
-        error: checkError.message || null,
-        code: checkError.code || null,
-        details: checkError.details || null,
-        hint: checkError.hint || null
+        error: checkError.message,
+        code: checkError.code || null
       });
     }
 
-    // ----------------------------
-    // Username đã tồn tại
-    // ----------------------------
     if (existingUser) {
       return res.status(409).json({
         message: "Username đã tồn tại"
       });
     }
 
-    // ----------------------------
     // Hash password
-    // ----------------------------
     const hashedPassword = await bcrypt.hash(
       password,
       10
     );
 
-    // ----------------------------
-    // Insert user
-    // ----------------------------
+    // Tạo user
     const {
       data,
       error: insertError
@@ -96,16 +88,11 @@ const register = async (req, res) => {
 
       return res.status(500).json({
         message: "Không thể tạo tài khoản",
-        error: insertError.message || null,
-        code: insertError.code || null,
-        details: insertError.details || null,
-        hint: insertError.hint || null
+        error: insertError.message,
+        code: insertError.code || null
       });
     }
 
-    // ----------------------------
-    // Thành công
-    // ----------------------------
     return res.status(201).json({
       message: "Đăng ký thành công",
       user: data
@@ -119,7 +106,7 @@ const register = async (req, res) => {
 
     return res.status(500).json({
       message: "Server error",
-      error: error.message || null
+      error: error.message
     });
   }
 };
@@ -134,9 +121,6 @@ const login = async (req, res) => {
 
     const { username, password } = req.body;
 
-    // ----------------------------
-    // Kiểm tra dữ liệu
-    // ----------------------------
     if (!username || !password) {
       return res.status(400).json({
         message: "Username và password không được để trống"
@@ -145,9 +129,7 @@ const login = async (req, res) => {
 
     const cleanUsername = username.trim();
 
-    // ----------------------------
     // Tìm user
-    // ----------------------------
     const {
       data: user,
       error: loginError
@@ -167,25 +149,18 @@ const login = async (req, res) => {
 
       return res.status(500).json({
         message: "Lỗi database",
-        error: loginError.message || null,
-        code: loginError.code || null,
-        details: loginError.details || null,
-        hint: loginError.hint || null
+        error: loginError.message,
+        code: loginError.code || null
       });
     }
 
-    // ----------------------------
-    // Không tìm thấy user
-    // ----------------------------
     if (!user) {
       return res.status(401).json({
         message: "Username hoặc password không đúng"
       });
     }
 
-    // ----------------------------
     // Kiểm tra password
-    // ----------------------------
     const passwordCorrect =
       await bcrypt.compare(
         password,
@@ -198,9 +173,6 @@ const login = async (req, res) => {
       });
     }
 
-    // ----------------------------
-    // Thành công
-    // ----------------------------
     return res.status(200).json({
       message: "Đăng nhập thành công",
       user: {
@@ -218,15 +190,12 @@ const login = async (req, res) => {
 
     return res.status(500).json({
       message: "Server error",
-      error: error.message || null
+      error: error.message
     });
   }
 };
 
 
-// ==================================================
-// EXPORT
-// ==================================================
 module.exports = {
   register,
   login
