@@ -15,11 +15,23 @@ const register = async (req, res) => {
       });
     }
 
+    // Chuẩn hóa username
+    const cleanUsername = username.trim();
+
+    if (!cleanUsername) {
+      return res.status(400).json({
+        message: "Username không được để trống"
+      });
+    }
+
     // Kiểm tra username đã tồn tại
-    const { data: existingUser, error: checkError } = await supabase
+    const {
+      data: existingUser,
+      error: checkError
+    } = await supabase
       .from("users")
       .select("id")
-      .eq("username", username)
+      .eq("username", cleanUsername)
       .maybeSingle();
 
     if (checkError) {
@@ -28,12 +40,13 @@ const register = async (req, res) => {
       return res.status(500).json({
         message: "Lỗi kiểm tra tài khoản",
         error: checkError.message,
-        code: checkError.code,
-        details: checkError.details,
-        hint: checkError.hint
+        code: checkError.code || null,
+        details: checkError.details || null,
+        hint: checkError.hint || null
       });
     }
 
+    // Username đã tồn tại
     if (existingUser) {
       return res.status(409).json({
         message: "Username đã tồn tại"
@@ -44,26 +57,29 @@ const register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Tạo tài khoản
-    const { data, error } = await supabase
+    const {
+      data,
+      error: insertError
+    } = await supabase
       .from("users")
       .insert([
         {
-          username: username,
+          username: cleanUsername,
           password: hashedPassword
         }
       ])
       .select("id, username, created_at")
       .single();
 
-    if (error) {
-      console.error("SUPABASE REGISTER ERROR:", error);
+    if (insertError) {
+      console.error("SUPABASE REGISTER ERROR:", insertError);
 
       return res.status(500).json({
         message: "Không thể tạo tài khoản",
-        error: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint
+        error: insertError.message,
+        code: insertError.code || null,
+        details: insertError.details || null,
+        hint: insertError.hint || null
       });
     }
 
@@ -97,26 +113,32 @@ const login = async (req, res) => {
       });
     }
 
+    // Chuẩn hóa username
+    const cleanUsername = username.trim();
+
     // Tìm tài khoản
-    const { data: user, error } = await supabase
+    const {
+      data: user,
+      error: loginError
+    } = await supabase
       .from("users")
       .select("id, username, password, created_at")
-      .eq("username", username)
+      .eq("username", cleanUsername)
       .maybeSingle();
 
-    if (error) {
-      console.error("SUPABASE LOGIN ERROR:", error);
+    if (loginError) {
+      console.error("SUPABASE LOGIN ERROR:", loginError);
 
       return res.status(500).json({
         message: "Lỗi database",
-        error: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint
+        error: loginError.message,
+        code: loginError.code || null,
+        details: loginError.details || null,
+        hint: loginError.hint || null
       });
     }
 
-    // Không tìm thấy user
+    // Không tìm thấy tài khoản
     if (!user) {
       return res.status(401).json({
         message: "Username hoặc password không đúng"
@@ -136,7 +158,6 @@ const login = async (req, res) => {
     }
 
     // Đăng nhập thành công
-    // Không trả password về frontend
     return res.status(200).json({
       message: "Đăng nhập thành công",
       user: {
