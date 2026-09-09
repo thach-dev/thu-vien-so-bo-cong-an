@@ -4,12 +4,13 @@ const cors = require("cors");
 const app = express();
 
 // ========================
-// CORS - CHO PHÉP TẤT CẢ
+// CORS
+// Cho phép tất cả origin
 // ========================
 app.use(cors());
 
 // ========================
-// JSON
+// JSON BODY
 // ========================
 app.use(express.json());
 
@@ -21,11 +22,21 @@ const authRoutes = require("./routes/auth");
 app.use("/api/auth", authRoutes);
 
 // ========================
-// TEST SERVER
+// TEST BACKEND
 // ========================
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
     message: "Backend is running"
+  });
+});
+
+// ========================
+// 404
+// ========================
+app.use((req, res) => {
+  res.status(404).json({
+    message: "API không tồn tại",
+    path: req.originalUrl
   });
 });
 
