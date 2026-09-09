@@ -1,10 +1,16 @@
-const express = require('express');
+const express = require("express");
 
 const app = express();
 
 app.use(express.json());
 
-// routes
-app.use('/api', require('./routes'));
+// routes của bạn
+// app.use("/api/...", ...);
+
+app.get("/", (req, res) => {
+    res.json({
+        message: "Backend is running"
+    });
+});
 
 module.exports = app;
