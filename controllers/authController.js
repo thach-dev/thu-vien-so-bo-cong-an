@@ -15,7 +15,7 @@ const register = async (req, res) => {
       });
     }
 
-    // Kiểm tra username đã tồn tại chưa
+    // Kiểm tra username đã tồn tại
     const { data: existingUser, error: checkError } = await supabase
       .from("users")
       .select("id")
@@ -23,10 +23,14 @@ const register = async (req, res) => {
       .maybeSingle();
 
     if (checkError) {
-      console.error(checkError);
+      console.error("SUPABASE CHECK USER ERROR:", checkError);
 
       return res.status(500).json({
-        message: "Lỗi kiểm tra tài khoản"
+        message: "Lỗi kiểm tra tài khoản",
+        error: checkError.message,
+        code: checkError.code,
+        details: checkError.details,
+        hint: checkError.hint
       });
     }
 
@@ -39,7 +43,7 @@ const register = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Tạo user
+    // Tạo tài khoản
     const { data, error } = await supabase
       .from("users")
       .insert([
@@ -52,10 +56,14 @@ const register = async (req, res) => {
       .single();
 
     if (error) {
-      console.error(error);
+      console.error("SUPABASE REGISTER ERROR:", error);
 
       return res.status(500).json({
-        message: "Không thể tạo tài khoản"
+        message: "Không thể tạo tài khoản",
+        error: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint
       });
     }
 
@@ -65,10 +73,11 @@ const register = async (req, res) => {
     });
 
   } catch (error) {
-    console.error(error);
+    console.error("REGISTER SERVER ERROR:", error);
 
     return res.status(500).json({
-      message: "Server error"
+      message: "Server error",
+      error: error.message
     });
   }
 };
@@ -88,28 +97,33 @@ const login = async (req, res) => {
       });
     }
 
-    // Tìm user
+    // Tìm tài khoản
     const { data: user, error } = await supabase
       .from("users")
-      .select("*")
+      .select("id, username, password, created_at")
       .eq("username", username)
       .maybeSingle();
 
     if (error) {
-      console.error(error);
+      console.error("SUPABASE LOGIN ERROR:", error);
 
       return res.status(500).json({
-        message: "Lỗi database"
+        message: "Lỗi database",
+        error: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint
       });
     }
 
+    // Không tìm thấy user
     if (!user) {
       return res.status(401).json({
         message: "Username hoặc password không đúng"
       });
     }
 
-    // So sánh password
+    // Kiểm tra password
     const passwordCorrect = await bcrypt.compare(
       password,
       user.password
@@ -121,6 +135,7 @@ const login = async (req, res) => {
       });
     }
 
+    // Đăng nhập thành công
     // Không trả password về frontend
     return res.status(200).json({
       message: "Đăng nhập thành công",
@@ -132,14 +147,19 @@ const login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error(error);
+    console.error("LOGIN SERVER ERROR:", error);
 
     return res.status(500).json({
-      message: "Server error"
+      message: "Server error",
+      error: error.message
     });
   }
 };
 
+
+// ========================
+// EXPORT
+// ========================
 module.exports = {
   register,
   login
