@@ -11,7 +11,7 @@ const requireAuth = (req, res, next) => {
   // Khởi tạo Supabase client kèm token của chính user đó để kích hoạt RLS
   req.supabase = createClient(
     process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY,
+    process.env.MY_SUPABASE_KEY,
     {
       global: {
         headers: {
