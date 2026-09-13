@@ -1,7 +1,5 @@
 const supabase = require("../supabase");
-
-// Đuôi domain giả lập để khớp với định dạng Supabase Auth
-const DOMAIN_SUFFIX = "@app.local";
+const bcrypt = require("bcryptjs");
 
 // ==================================================
 // REGISTER
@@ -10,6 +8,7 @@ const register = async (req, res) => {
   try {
     const { username, password } = req.body;
 
+    // Kiểm tra dữ liệu
     if (!username || !password) {
       return res.status(400).json({
         message: "Username và password không được để trống"
@@ -17,43 +16,75 @@ const register = async (req, res) => {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const internalEmail = `${cleanUsername}${DOMAIN_SUFFIX}`;
+
+    // Kiểm tra username
+    if (cleanUsername.length < 3) {
+      return res.status(400).json({
+        message: "Username phải có ít nhất 3 ký tự"
+      });
+    }
+
+    // Kiểm tra password
+    if (password.length < 3) {
+      return res.status(400).json({
+        message: "Password phải có ít nhất 3 ký tự"
+      });
+    }
 
     console.log("REGISTER:", {
-      username: cleanUsername,
-      internalEmail
+      username: cleanUsername
     });
 
-    const { data, error } = await supabase.auth.signUp({
-      email: internalEmail,
-      password,
-      options: {
-        data: {
-          username: cleanUsername
+    // Kiểm tra username đã tồn tại chưa
+    const { data: existingUser, error: checkError } = await supabase
+      .from("users")
+      .select("id")
+      .eq("username", cleanUsername)
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("CHECK USER ERROR:", checkError);
+
+      return res.status(500).json({
+        message: "Không thể kiểm tra username",
+        error: checkError.message
+      });
+    }
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "Username đã tồn tại"
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Tạo user
+    const { data, error } = await supabase
+      .from("users")
+      .insert([
+        {
+          username: cleanUsername,
+          password: hashedPassword,
+          role: "user"
         }
-      }
-    });
+      ])
+      .select("id, username, role, created_at")
+      .single();
 
     if (error) {
       console.error("SUPABASE REGISTER ERROR:", error);
 
       return res.status(400).json({
-        message: "Supabase Register Error",
-        code: error.code || null,
-        error: error.message || null,
-        details: error.details || null,
-        hint: error.hint || null
+        message: "Đăng ký thất bại",
+        error: error.message
       });
     }
 
     return res.status(201).json({
       message: "Đăng ký thành công",
-      user: {
-        id: data.user.id,
-        username: cleanUsername,
-        created_at: data.user.created_at
-      },
-      session: data.session
+      user: data
     });
 
   } catch (error) {
@@ -61,13 +92,11 @@ const register = async (req, res) => {
 
     return res.status(500).json({
       message: "Server Error",
-      error: error.message || null,
-      stack: process.env.NODE_ENV === "production"
-        ? undefined
-        : error.stack
+      error: error.message || null
     });
   }
 };
+
 
 // ==================================================
 // LOGIN
@@ -76,6 +105,7 @@ const login = async (req, res) => {
   try {
     const { username, password } = req.body;
 
+    // Kiểm tra dữ liệu
     if (!username || !password) {
       return res.status(400).json({
         message: "Username và password không được để trống"
@@ -83,38 +113,57 @@ const login = async (req, res) => {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const internalEmail = `${cleanUsername}${DOMAIN_SUFFIX}`;
 
     console.log("LOGIN:", {
-      username: cleanUsername,
-      internalEmail
+      username: cleanUsername
     });
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: internalEmail,
-      password
-    });
+    // Tìm user theo username
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, username, password, role, created_at")
+      .eq("username", cleanUsername)
+      .maybeSingle();
 
-    // Lỗi từ Supabase Auth
     if (error) {
       console.error("SUPABASE LOGIN ERROR:", error);
 
-      return res.status(401).json({
-        message: "Supabase Login Error",
-        code: error.code || null,
-        error: error.message || null,
-        details: error.details || null,
-        hint: error.hint || null
+      return res.status(500).json({
+        message: "Không thể kiểm tra tài khoản",
+        error: error.message
       });
     }
 
+    // Không tìm thấy username
+    if (!user) {
+      return res.status(401).json({
+        message: "Username hoặc password không đúng"
+      });
+    }
+
+    // Kiểm tra password
+    const passwordMatch = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!passwordMatch) {
+      return res.status(401).json({
+        message: "Username hoặc password không đúng"
+      });
+    }
+
+    // Không trả password về frontend
+    const userResponse = {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      created_at: user.created_at
+    };
+
     return res.status(200).json({
       message: "Đăng nhập thành công",
-      user: {
-        id: data.user.id,
-        username: cleanUsername
-      },
-      session: data.session
+      user: userResponse
     });
 
   } catch (error) {
@@ -122,13 +171,11 @@ const login = async (req, res) => {
 
     return res.status(500).json({
       message: "Server Error",
-      error: error.message || null,
-      stack: process.env.NODE_ENV === "production"
-        ? undefined
-        : error.stack
+      error: error.message || null
     });
   }
 };
+
 
 module.exports = {
   register,
