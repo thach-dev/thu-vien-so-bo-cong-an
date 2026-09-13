@@ -19,7 +19,6 @@ const login = async (req, res) => {
     console.log("Password length:", String(password).length);
     console.log("=================================");
 
-    // Tìm user
     const {
       data: user,
       error
@@ -29,9 +28,8 @@ const login = async (req, res) => {
       .eq("username", cleanUsername)
       .maybeSingle();
 
-    // Lỗi Supabase
     if (error) {
-      console.error("SUPABASE LOGIN ERROR:", error);
+      console.error("❌ SUPABASE LOGIN ERROR:", error);
 
       return res.status(500).json({
         message: "Không thể kiểm tra tài khoản",
@@ -39,7 +37,6 @@ const login = async (req, res) => {
       });
     }
 
-    // Không tìm thấy user
     if (!user) {
       console.log("❌ USER NOT FOUND");
       console.log("Username searched:", cleanUsername);
@@ -53,9 +50,11 @@ const login = async (req, res) => {
     console.log("User ID:", user.id);
     console.log("Username DB:", user.username);
     console.log("Has password:", !!user.password);
-    console.log("Password hash length:", user.password?.length);
+    console.log(
+      "Password hash length:",
+      user.password ? user.password.length : 0
+    );
 
-    // Kiểm tra bcrypt
     const isBcryptHash =
       typeof user.password === "string" &&
       (
@@ -74,8 +73,7 @@ const login = async (req, res) => {
       });
     }
 
-    // So sánh password
-    console.log("Đang chạy bcrypt.compare...");
+    console.log("🔐 Đang chạy bcrypt.compare...");
 
     const passwordMatch = await bcrypt.compare(
       String(password),
@@ -92,7 +90,6 @@ const login = async (req, res) => {
       });
     }
 
-    // Thành công
     const userResponse = {
       id: user.id,
       username: user.username,
@@ -114,4 +111,10 @@ const login = async (req, res) => {
       error: error.message
     });
   }
+};
+
+
+module.exports = {
+  register,
+  login
 };
