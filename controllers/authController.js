@@ -1,3 +1,4 @@
+
 const supabase = require("../supabase");
 const bcrypt = require("bcryptjs");
 
@@ -67,6 +68,8 @@ const register = async (req, res) => {
       10
     );
 
+    console.log("PASSWORD HASH CREATED:", !!hashedPassword);
+
     // --------------------------------------------------
     // Insert user
     // --------------------------------------------------
@@ -91,7 +94,10 @@ const register = async (req, res) => {
       });
     }
 
-    console.log("REGISTER SUCCESS:", data);
+    console.log("REGISTER SUCCESS:", {
+      id: data.id,
+      username: data.username
+    });
 
     return res.status(201).json({
       message: "Đăng ký thành công",
@@ -133,6 +139,7 @@ const login = async (req, res) => {
     console.log("=================================");
     console.log("LOGIN REQUEST");
     console.log("Username:", cleanUsername);
+    console.log("Password received:", !!password);
     console.log("=================================");
 
     // --------------------------------------------------
@@ -170,11 +177,40 @@ const login = async (req, res) => {
       });
     }
 
+    // --------------------------------------------------
+    // USER TỒN TẠI
+    // --------------------------------------------------
     console.log("USER FOUND:", {
       id: user.id,
       username: user.username,
-      hasPassword: !!user.password
+      hasPassword: !!user.password,
+      passwordLength: user.password
+        ? user.password.length
+        : 0
     });
+
+    // --------------------------------------------------
+    // Kiểm tra password có phải bcrypt hash không
+    // --------------------------------------------------
+    const isBcryptHash =
+      typeof user.password === "string" &&
+      (
+        user.password.startsWith("$2a$") ||
+        user.password.startsWith("$2b$") ||
+        user.password.startsWith("$2y$")
+      );
+
+    console.log("IS BCRYPT HASH:", isBcryptHash);
+
+    if (!isBcryptHash) {
+      console.log(
+        "WARNING: Password trong database không phải bcrypt hash"
+      );
+
+      return res.status(500).json({
+        message: "Password trong database không đúng định dạng bcrypt"
+      });
+    }
 
     // --------------------------------------------------
     // Kiểm tra password bằng bcrypt
@@ -186,7 +222,12 @@ const login = async (req, res) => {
 
     console.log("PASSWORD MATCH:", passwordMatch);
 
+    // --------------------------------------------------
+    // Password sai
+    // --------------------------------------------------
     if (!passwordMatch) {
+      console.log("PASSWORD INCORRECT");
+
       return res.status(401).json({
         message: "Username hoặc password không đúng"
       });
@@ -219,6 +260,9 @@ const login = async (req, res) => {
 };
 
 
+// ==================================================
+// EXPORT
+// ==================================================
 module.exports = {
   register,
   login
