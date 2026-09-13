@@ -4,12 +4,11 @@ const router = express.Router();
 
 const authController = require("../controllers/authController");
 
+// ===============================
+// DEBUG
+// ===============================
 
-// Debug
-console.log(
-  "AUTH CONTROLLER:",
-  authController
-);
+console.log("AUTH CONTROLLER:", authController);
 
 console.log(
   "REGISTER TYPE:",
@@ -21,17 +20,31 @@ console.log(
   typeof authController.login
 );
 
+console.log(
+  "QR LOGIN TYPE:",
+  typeof authController.qrLogin
+);
 
-// Routes
+// ===============================
+// ROUTES
+// ===============================
+
+// Đăng ký
 router.post(
   "/register",
   authController.register
 );
 
+// Đăng nhập bằng username + password
 router.post(
   "/login",
   authController.login
 );
 
+// Đăng nhập bằng mã QR
+router.post(
+  "/qr-login",
+  authController.qrLogin
+);
 
 module.exports = router;

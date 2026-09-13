@@ -82,7 +82,10 @@ const register = async (req, res) => {
       10
     );
 
-    console.log("PASSWORD HASH CREATED:", !!hashedPassword);
+    console.log(
+      "PASSWORD HASH CREATED:",
+      !!hashedPassword
+    );
 
 
     // =================================================
@@ -363,10 +366,136 @@ const login = async (req, res) => {
 
 
 // =====================================================
+// QR LOGIN
+// =====================================================
+
+const qrLogin = async (req, res) => {
+  try {
+
+    const { qr_code } = req.body;
+
+
+    // =================================================
+    // KIỂM TRA DỮ LIỆU
+    // =================================================
+
+    if (!qr_code) {
+      return res.status(400).json({
+        message: "Mã QR không được để trống"
+      });
+    }
+
+
+    // =================================================
+    // CHUẨN HÓA MÃ QR
+    // =================================================
+
+    const cleanQrCode = String(qr_code).trim();
+
+
+    console.log("=================================");
+    console.log("QR LOGIN REQUEST");
+    console.log("QR Code:", cleanQrCode);
+    console.log("=================================");
+
+
+    // =================================================
+    // TÌM USER THEO QR CODE
+    // =================================================
+
+    const {
+      data: user,
+      error
+    } = await supabase
+      .from("users")
+      .select(
+        "id, username, created_at, qr_code"
+      )
+      .eq("qr_code", cleanQrCode)
+      .maybeSingle();
+
+
+    // =================================================
+    // SUPABASE ERROR
+    // =================================================
+
+    if (error) {
+
+      console.error(
+        "SUPABASE QR LOGIN ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        message: "Không thể kiểm tra mã QR",
+        error: error.message
+      });
+    }
+
+
+    // =================================================
+    // KHÔNG TÌM THẤY QR
+    // =================================================
+
+    if (!user) {
+
+      console.log("QR CODE NOT FOUND");
+      console.log(
+        "QR Code searched:",
+        cleanQrCode
+      );
+
+      return res.status(401).json({
+        message: "Mã QR không hợp lệ"
+      });
+    }
+
+
+    // =================================================
+    // QR LOGIN SUCCESS
+    // =================================================
+
+    const userResponse = {
+      id: user.id,
+      username: user.username,
+      created_at: user.created_at
+    };
+
+
+    console.log(
+      "QR LOGIN SUCCESS:",
+      userResponse
+    );
+
+
+    return res.status(200).json({
+      message: "Đăng nhập bằng QR thành công",
+      user: userResponse
+    });
+
+
+  } catch (error) {
+
+    console.error(
+      "QR LOGIN SERVER ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server Error",
+      error: error.message
+    });
+  }
+};
+
+
+
+// =====================================================
 // EXPORT
 // =====================================================
 
 module.exports = {
   register,
-  login
+  login,
+  qrLogin
 };
