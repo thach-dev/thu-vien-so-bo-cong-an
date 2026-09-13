@@ -67,10 +67,9 @@ const register = async (req, res) => {
         {
           username: cleanUsername,
           password: hashedPassword,
-          role: "user"
         }
       ])
-      .select("id, username, role, created_at")
+      .select("id, username, created_at")
       .single();
 
     if (error) {
@@ -121,7 +120,7 @@ const login = async (req, res) => {
     // Tìm user theo username
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, username, password, role, created_at")
+      .select("id, username, password, created_at")
       .eq("username", cleanUsername)
       .maybeSingle();
 
@@ -157,7 +156,6 @@ const login = async (req, res) => {
     const userResponse = {
       id: user.id,
       username: user.username,
-      role: user.role,
       created_at: user.created_at
     };
 
