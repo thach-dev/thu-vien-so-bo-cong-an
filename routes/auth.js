@@ -1,8 +1,12 @@
 const express = require("express");
+
 const router = express.Router();
+
 const { register, login } = require("../controllers/authController");
 
-// Tuyệt đối KHÔNG viết "/api/auth/register", chỉ viết "/register"
+console.log("REGISTER TYPE:", typeof register);
+console.log("LOGIN TYPE:", typeof login);
+
 router.post("/register", register);
 router.post("/login", login);
 
