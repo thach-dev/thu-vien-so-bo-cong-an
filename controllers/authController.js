@@ -17,9 +17,12 @@ const register = async (req, res) => {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-
-    // Biến username thành định dạng email nội bộ cho Supabase Auth
     const internalEmail = `${cleanUsername}${DOMAIN_SUFFIX}`;
+
+    console.log("REGISTER:", {
+      username: cleanUsername,
+      internalEmail
+    });
 
     const { data, error } = await supabase.auth.signUp({
       email: internalEmail,
@@ -32,10 +35,15 @@ const register = async (req, res) => {
     });
 
     if (error) {
-      if (error.message.includes("already registered")) {
-        return res.status(409).json({ message: "Username đã tồn tại" });
-      }
-      return res.status(400).json({ message: error.message });
+      console.error("SUPABASE REGISTER ERROR:", error);
+
+      return res.status(400).json({
+        message: "Supabase Register Error",
+        code: error.code || null,
+        error: error.message || null,
+        details: error.details || null,
+        hint: error.hint || null
+      });
     }
 
     return res.status(201).json({
@@ -47,10 +55,16 @@ const register = async (req, res) => {
       },
       session: data.session
     });
+
   } catch (error) {
+    console.error("REGISTER SERVER ERROR:", error);
+
     return res.status(500).json({
-      message: "Server error",
-      error: error.message
+      message: "Server Error",
+      error: error.message || null,
+      stack: process.env.NODE_ENV === "production"
+        ? undefined
+        : error.stack
     });
   }
 };
@@ -71,14 +85,26 @@ const login = async (req, res) => {
     const cleanUsername = username.trim().toLowerCase();
     const internalEmail = `${cleanUsername}${DOMAIN_SUFFIX}`;
 
+    console.log("LOGIN:", {
+      username: cleanUsername,
+      internalEmail
+    });
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email: internalEmail,
       password
     });
 
+    // Lỗi từ Supabase Auth
     if (error) {
+      console.error("SUPABASE LOGIN ERROR:", error);
+
       return res.status(401).json({
-        message: "Username hoặc password không chính xác"
+        message: "Supabase Login Error",
+        code: error.code || null,
+        error: error.message || null,
+        details: error.details || null,
+        hint: error.hint || null
       });
     }
 
@@ -88,12 +114,18 @@ const login = async (req, res) => {
         id: data.user.id,
         username: cleanUsername
       },
-      session: data.session // Chứa access_token để gọi các route có RLS
+      session: data.session
     });
+
   } catch (error) {
+    console.error("LOGIN SERVER ERROR:", error);
+
     return res.status(500).json({
-      message: "Server error",
-      error: error.message
+      message: "Server Error",
+      error: error.message || null,
+      stack: process.env.NODE_ENV === "production"
+        ? undefined
+        : error.stack
     });
   }
 };
