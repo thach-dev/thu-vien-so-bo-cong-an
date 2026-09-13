@@ -2,12 +2,36 @@ const express = require("express");
 
 const router = express.Router();
 
-const { register, login } = require("../controllers/authController");
+const authController = require("../controllers/authController");
 
-console.log("REGISTER TYPE:", typeof register);
-console.log("LOGIN TYPE:", typeof login);
 
-router.post("/register", register);
-router.post("/login", login);
+// Debug
+console.log(
+  "AUTH CONTROLLER:",
+  authController
+);
+
+console.log(
+  "REGISTER TYPE:",
+  typeof authController.register
+);
+
+console.log(
+  "LOGIN TYPE:",
+  typeof authController.login
+);
+
+
+// Routes
+router.post(
+  "/register",
+  authController.register
+);
+
+router.post(
+  "/login",
+  authController.login
+);
+
 
 module.exports = router;
