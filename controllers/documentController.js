@@ -1,6 +1,47 @@
-const supabase = require("../supabase");
 
-// 1. Tải lên tài liệu mới (Học viên) -> trạng thái PENDING
+const supabase = require("../supabase");
+// =====================================================
+// CẤU HÌNH
+// =====================================================
+
+const BUCKET_NAME = "documents";
+
+// Các định dạng file được phép upload
+const ALLOWED_EXTENSIONS = [
+  "pdf",
+  "doc",
+  "docx",
+  "ppt",
+  "pptx",
+  "xls",
+  "xlsx"
+];
+
+const ALLOWED_MIME_TYPES = [
+  "application/pdf",
+
+  // Word
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+  // PowerPoint
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+
+  // Excel
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+];
+
+// =====================================================
+// 1. UPLOAD TÀI LIỆU
+// =====================================================
+// Học viên upload tài liệu
+// File được lưu vào Supabase Storage
+// Thông tin được lưu vào bảng documents
+// Trạng thái mặc định: PENDING
+// =====================================================
+
 const uploadDocument = async (req, res) => {
   try {
     const {
@@ -15,81 +56,200 @@ const uploadDocument = async (req, res) => {
 
     const file = req.file;
 
+    // -------------------------------------------------
     // Kiểm tra dữ liệu bắt buộc
+    // -------------------------------------------------
+
     if (!uploader_id || !title || !file) {
       return res.status(400).json({
-        message: "Thiếu dữ liệu bắt buộc: uploader_id, title hoặc tệp PDF."
+        message:
+          "Thiếu dữ liệu bắt buộc: uploader_id, title hoặc tệp tài liệu."
       });
     }
 
-    // Cam kết bản quyền bắt buộc theo đề tài NCKH
-    const isLicenseConfirmed = license_confirmed === true || license_confirmed === "true";
+    // -------------------------------------------------
+    // Kiểm tra cam kết bản quyền
+    // -------------------------------------------------
+
+    const isLicenseConfirmed =
+      license_confirmed === true ||
+      license_confirmed === "true";
+
     if (!isLicenseConfirmed) {
       return res.status(400).json({
-        message: "Bạn phải đồng ý cam kết tuân thủ quyền sở hữu trí tuệ."
+        message:
+          "Bạn phải đồng ý cam kết tuân thủ quyền sở hữu trí tuệ."
       });
     }
 
-    // Tải file lên Supabase Storage bucket 'documents'
-    const fileExt = file.originalname.split(".").pop();
-    const fileName = `\({Date.now()}_\){Math.random().toString(36).substring(7)}.${fileExt}`;
+    // -------------------------------------------------
+    // Kiểm tra phần mở rộng file
+    // -------------------------------------------------
+
+    const originalName = file.originalname || "";
+
+    const fileExt = originalName
+      .split(".")
+      .pop()
+      .toLowerCase();
+
+    if (!ALLOWED_EXTENSIONS.includes(fileExt)) {
+      return res.status(400).json({
+        message:
+          "Định dạng file không được hỗ trợ.",
+        allowedExtensions: ALLOWED_EXTENSIONS
+      });
+    }
+
+    // -------------------------------------------------
+    // Kiểm tra MIME type
+    // -------------------------------------------------
+
+    if (
+      file.mimetype &&
+      !ALLOWED_MIME_TYPES.includes(file.mimetype)
+    ) {
+      return res.status(400).json({
+        message:
+          "Loại file không được hỗ trợ.",
+        mimetype: file.mimetype
+      });
+    }
+
+    // -------------------------------------------------
+    // Tạo tên file mới
+    // -------------------------------------------------
+
+    const fileName = `${Date.now()}_${Math.random()
+      .toString(36)
+      .substring(2, 10)}.${fileExt}`;
+
+    console.log("=================================");
+    console.log("UPLOAD DOCUMENT");
+    console.log("Original name:", originalName);
+    console.log("File name:", fileName);
+    console.log("Extension:", fileExt);
+    console.log("Mimetype:", file.mimetype);
+    console.log("Bucket:", BUCKET_NAME);
+    console.log("=================================");
+
+    // -------------------------------------------------
+    // Upload file lên Supabase Storage
+    // -------------------------------------------------
 
     const { error: storageError } = await supabase.storage
-      .from("documents")
+      .from(BUCKET_NAME)
       .upload(fileName, file.buffer, {
         contentType: file.mimetype,
         upsert: false
       });
 
     if (storageError) {
-      console.error("Storage upload error:", storageError);
+      console.error(
+        "Storage upload error:",
+        storageError
+      );
+
       return res.status(500).json({
         message: "Không thể lưu tệp lên Storage",
         error: storageError.message
       });
     }
 
-    // Lấy link công khai của file vừa tải lên
+    // -------------------------------------------------
+    // Lấy Public URL
+    // -------------------------------------------------
+
     const { data: urlData } = supabase.storage
-      .from("documents")
+      .from(BUCKET_NAME)
       .getPublicUrl(fileName);
 
-    const publicUrl = urlData.publicUrl;
+    const publicUrl = urlData?.publicUrl;
 
-    // Lưu thông tin vào bảng 'documents'
+    if (!publicUrl) {
+      // Nếu lấy URL thất bại thì xóa file vừa upload
+      await supabase.storage
+        .from(BUCKET_NAME)
+        .remove([fileName]);
+
+      return res.status(500).json({
+        message: "Không thể lấy đường dẫn file từ Storage."
+      });
+    }
+
+    // -------------------------------------------------
+    // Lưu thông tin vào bảng documents
+    // -------------------------------------------------
+
     const { data: newDoc, error: dbError } = await supabase
       .from("documents")
       .insert({
         uploader_id,
+
         title: String(title).trim(),
-        description: description ? String(description).trim() : null,
+
+        description: description
+          ? String(description).trim()
+          : null,
+
         category: category || "LECTURE_NOTE",
+
         file_path: publicUrl,
-        original_author: originalAuthor ? String(originalAuthor).trim() : null,
-        source_citation: sourceCitation ? String(sourceCitation).trim() : null,
+
+        original_author: original_author
+          ? String(original_author).trim()
+          : null,
+
+        source_citation: source_citation
+          ? String(source_citation).trim()
+          : null,
+
         license_confirmed: true,
+
         status: "PENDING"
       })
-      .select("*, users:uploader_id (id, username, role)")
+      .select(
+        "*, users:uploader_id (id, username, role)"
+      )
       .single();
 
+    // -------------------------------------------------
+    // Nếu DB lỗi thì xóa file trên Storage
+    // -------------------------------------------------
+
     if (dbError) {
-      console.error("DB insert error:", dbError);
-      // Xóa file trên bucket nếu insert DB thất bại để tránh rác dung lượng
-      await supabase.storage.from("documents").remove([fileName]);
+      console.error(
+        "DB insert error:",
+        dbError
+      );
+
+      await supabase.storage
+        .from(BUCKET_NAME)
+        .remove([fileName]);
+
       return res.status(500).json({
-        message: "Không thể lưu tài liệu vào CSDL",
+        message:
+          "Không thể lưu tài liệu vào CSDL",
         error: dbError.message
       });
     }
 
+    // -------------------------------------------------
+    // Thành công
+    // -------------------------------------------------
+
     return res.status(201).json({
-      message: "Đăng tải tài liệu thành công, đang chờ kiểm duyệt.",
+      message:
+        "Đăng tải tài liệu thành công, đang chờ kiểm duyệt.",
       document: newDoc
     });
 
   } catch (error) {
-    console.error("Upload server error:", error);
+    console.error(
+      "Upload server error:",
+      error
+    );
+
     return res.status(500).json({
       message: "Server Error",
       error: error.message
@@ -97,40 +257,82 @@ const uploadDocument = async (req, res) => {
   }
 };
 
-// 2. Lấy danh sách tài liệu đã duyệt (Kho tài nguyên chung)
+
+// =====================================================
+// 2. LẤY DANH SÁCH TÀI LIỆU ĐÃ DUYỆT
+// =====================================================
+
 const getApprovedDocuments = async (req, res) => {
   try {
-    const { search, category } = req.query;
+    const {
+      search,
+      category
+    } = req.query;
 
     let query = supabase
       .from("documents")
-      .select("*, users:uploader_id (id, username, role)")
+      .select(
+        "*, users:uploader_id (id, username, role)"
+      )
       .eq("status", "APPROVED")
-      .order("created_at", { ascending: false });
+      .order("created_at", {
+        ascending: false
+      });
 
-    if (category && category !== "ALL") {
-      query = query.eq("category", category);
+    // -------------------------------------------------
+    // Lọc category
+    // -------------------------------------------------
+
+    if (
+      category &&
+      category !== "ALL"
+    ) {
+      query = query.eq(
+        "category",
+        category
+      );
     }
+
+    // -------------------------------------------------
+    // Tìm kiếm theo title
+    // -------------------------------------------------
 
     if (search) {
-      query = query.ilike("title", `%${search.trim()}%`);
+      query = query.ilike(
+        "title",
+        `%${search.trim()}%`
+      );
     }
 
-    const { data: docs, error } = await query;
+    const {
+      data: docs,
+      error
+    } = await query;
 
     if (error) {
+      console.error(
+        "Get approved documents error:",
+        error
+      );
+
       return res.status(500).json({
-        message: "Lỗi lấy danh sách tài liệu",
+        message:
+          "Lỗi lấy danh sách tài liệu",
         error: error.message
       });
     }
 
     return res.status(200).json({
-      total: docs.length,
-      documents: docs
+      total: docs?.length || 0,
+      documents: docs || []
     });
 
   } catch (error) {
+    console.error(
+      "Get approved server error:",
+      error
+    );
+
     return res.status(500).json({
       message: "Server Error",
       error: error.message
@@ -138,28 +340,52 @@ const getApprovedDocuments = async (req, res) => {
   }
 };
 
-// 3. Lấy danh sách tài liệu chờ duyệt (Dành cho Admin)
+
+// =====================================================
+// 3. LẤY DANH SÁCH TÀI LIỆU CHỜ DUYỆT
+// =====================================================
+// Dành cho Admin
+// =====================================================
+
 const getPendingDocuments = async (req, res) => {
   try {
-    const { data: docs, error } = await supabase
+    const {
+      data: docs,
+      error
+    } = await supabase
       .from("documents")
-      .select("*, users:uploader_id (id, username, role)")
+      .select(
+        "*, users:uploader_id (id, username, role)"
+      )
       .eq("status", "PENDING")
-      .order("created_at", { ascending: false });
+      .order("created_at", {
+        ascending: false
+      });
 
     if (error) {
+      console.error(
+        "Get pending documents error:",
+        error
+      );
+
       return res.status(500).json({
-        message: "Lỗi lấy danh sách chờ duyệt",
+        message:
+          "Lỗi lấy danh sách chờ duyệt",
         error: error.message
       });
     }
 
     return res.status(200).json({
-      total: docs.length,
-      documents: docs
+      total: docs?.length || 0,
+      documents: docs || []
     });
 
   } catch (error) {
+    console.error(
+      "Get pending server error:",
+      error
+    );
+
     return res.status(500).json({
       message: "Server Error",
       error: error.message
@@ -167,48 +393,93 @@ const getPendingDocuments = async (req, res) => {
   }
 };
 
-// 4. Cập nhật trạng thái duyệt: APPROVED hoặc REJECTED
+
+// =====================================================
+// 4. CẬP NHẬT TRẠNG THÁI TÀI LIỆU
+// =====================================================
+// APPROVED hoặc REJECTED
+// =====================================================
+
 const updateDocumentStatus = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { status } = req.body;
+    const {
+      id
+    } = req.params;
 
-    if (!["APPROVED", "REJECTED"].includes(status)) {
+    const {
+      status
+    } = req.body;
+
+    // -------------------------------------------------
+    // Kiểm tra status
+    // -------------------------------------------------
+
+    if (
+      !["APPROVED", "REJECTED"].includes(status)
+    ) {
       return res.status(400).json({
-        message: "Trạng thái chỉ nhận giá trị: APPROVED hoặc REJECTED"
+        message:
+          "Trạng thái chỉ nhận giá trị: APPROVED hoặc REJECTED"
       });
     }
 
-    const { data, error } = await supabase
+    // -------------------------------------------------
+    // Update database
+    // -------------------------------------------------
+
+    const {
+      data,
+      error
+    } = await supabase
       .from("documents")
-      .update({ status })
+      .update({
+        status
+      })
       .eq("id", id)
       .select()
       .single();
 
     if (error) {
+      console.error(
+        "Update document status error:",
+        error
+      );
+
       return res.status(500).json({
-        message: "Cập nhật trạng thái thất bại",
+        message:
+          "Cập nhật trạng thái thất bại",
         error: error.message
       });
     }
 
     return res.status(200).json({
-      message: `Đã cập nhật trạng thái sang ${status}`,
+      message:
+        `Đã cập nhật trạng thái sang ${status}`,
       document: data
     });
 
   } catch (error) {
+    console.error(
+      "Update status server error:",
+      error
+    );
+
     return res.status(500).json({
       message: "Server Error",
       error: error.message
     });
   }
 };
+
+
+// =====================================================
+// EXPORT
+// =====================================================
 
 module.exports = {
   uploadDocument,
   getApprovedDocuments,
   getPendingDocuments,
   updateDocumentStatus
-};  
+};
+
