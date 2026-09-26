@@ -9,7 +9,7 @@
     "express": "^5.2.1",
     "mammoth": "^1.12.3",
     "multer": "^2.4.0",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "^1.1.1",
     "xlsx": "^0.18.5"
   }
 }
