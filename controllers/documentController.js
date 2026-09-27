@@ -58,7 +58,7 @@ const uploadDocument = async (req, res) => {
 
   try {
     const {
-      uploader_id,
+      id,
       title,
       description,
       category,
@@ -75,7 +75,7 @@ const uploadDocument = async (req, res) => {
 
     console.log("=================================");
     console.log("UPLOAD DOCUMENT");
-    console.log("Uploader:", uploader_id);
+    console.log("Uploader:", id);
     console.log("Title:", title);
     console.log("Original File:", file?.originalname);
     console.log("Decoded File:", decodeFileName(file?.originalname));
@@ -89,10 +89,10 @@ const uploadDocument = async (req, res) => {
     // KIỂM TRA DỮ LIỆU
     // =================================================
 
-    if (!uploader_id || !title || !file) {
+    if (!id || !title || !file) {
       return res.status(400).json({
         message:
-          "Thiếu dữ liệu bắt buộc: uploader_id, title hoặc file.",
+          "Thiếu dữ liệu bắt buộc: id, title hoặc file.",
       });
     }
 
@@ -305,7 +305,7 @@ const uploadDocument = async (req, res) => {
     } = await supabase
       .from("documents")
       .insert({
-        uploader_id,
+        id: id,
 
         title:
           String(title).trim(),
@@ -562,7 +562,7 @@ const getApprovedDocuments = async (req, res) => {
     } = await supabase
       .from("documents")
       .select(
-        "*, users:uploader_id (id, username, role)"
+        "*, users:id (id, username, role)"
       )
       .eq(
         "status",
@@ -722,7 +722,7 @@ const searchDocuments = async (req, res) => {
       supabase
         .from("documents")
         .select(
-          "*, users:uploader_id (id, username, role)",
+          "*, users:id (id, username, role)",
           {
             count: "exact",
           }
@@ -868,7 +868,7 @@ const getPendingDocuments = async (req, res) => {
     } = await supabase
       .from("documents")
       .select(
-        "*, users:uploader_id (id, username, role)"
+        "*, users:id (id, username, role)"
       )
       .eq(
         "status",
