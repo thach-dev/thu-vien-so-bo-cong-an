@@ -3,9 +3,10 @@ const express = require("express");
 const router = express.Router();
 
 const quizController = require("../controllers/quizController");
+const requireAuth = require("../middleware/requireAuth");
 
-// TODO: Gắn middleware xác thực thực tế của dự án trước khi sử dụng.
-router.post("/", quizController.createQuiz);
-router.get("/:id", quizController.getQuiz);
+// Xác thực JWT trước khi tạo hoặc xem quiz
+router.post("/", requireAuth, quizController.createQuiz);
+router.get("/:id", requireAuth, quizController.getQuiz);
 
 module.exports = router;
