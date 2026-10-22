@@ -249,6 +249,8 @@ async function createQuiz(req, res) {
 
     return res.status(500).json({
       message: error.message || "Không thể tạo Quiz.",
+      error: error.message || "Không có thông tin lỗi.",
+      status: error.status || error.response?.status || null,
     });
   }
 }
