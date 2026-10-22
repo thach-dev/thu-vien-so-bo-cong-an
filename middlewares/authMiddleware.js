@@ -1,53 +1,55 @@
 
-const { createClient } = require("@supabase/supabase-js");
+const jwt = require("jsonwebtoken");
 
-const requireAuth = async (req, res, next) => {
+const requireAuth = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
+
     const token = authHeader?.startsWith("Bearer ")
       ? authHeader.slice(7)
       : null;
 
     if (!token) {
       return res.status(401).json({
-        message: "Không có quyền truy cập (Thiếu Bearer Token)",
+        message: "Vui lòng đăng nhập để tiếp tục",
       });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.MY_SUPABASE_KEY;
+    const secret = process.env.JWT_SECRET;
 
-    if (!supabaseUrl || !supabaseKey) {
+    if (!secret) {
+      console.error("Thiếu JWT_SECRET trong biến môi trường");
+
       return res.status(500).json({
-        message: "Backend chưa cấu hình Supabase",
+        message: "Backend chưa cấu hình JWT_SECRET",
       });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    });
+    const decoded = jwt.verify(token, secret);
 
-    const { data, error } = await supabase.auth.getUser(token);
-
-    if (error || !data?.user) {
+    if (!decoded.id) {
       return res.status(401).json({
-        message: "Token không hợp lệ hoặc đã hết hạn",
+        message: "Token không chứa thông tin người dùng hợp lệ",
       });
     }
 
     req.user = {
-      id: data.user.id,
-      role: data.user.role,
+      id: decoded.id,
+      username: decoded.username,
+      role: decoded.role,
     };
-
-    req.supabase = supabase;
 
     next();
   } catch (error) {
+    if (
+      error.name === "JsonWebTokenError" ||
+      error.name === "TokenExpiredError"
+    ) {
+      return res.status(401).json({
+        message: "Token không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
+      });
+    }
+
     console.error("AUTH MIDDLEWARE ERROR:", error.message);
 
     return res.status(500).json({
