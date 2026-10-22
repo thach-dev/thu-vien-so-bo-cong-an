@@ -1,6 +1,11 @@
+
 require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
+const http = require("http");
+const { Server } = require("socket.io");
+
 const app = express();
 
 // =====================================================
@@ -10,7 +15,7 @@ app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization"]
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -20,22 +25,30 @@ app.use(
 app.use(express.json());
 
 // =====================================================
-// ROUTES
+// ROUTES CŨ
 // =====================================================
 const authRoutes = require("./routes/auth");
-const documentRoutes = require("./routes/document"); 
+const documentRoutes = require("./routes/document");
 const chatRoutes = require("./routes/chatRoutes");
 
 app.use("/api/auth", authRoutes);
-app.use("/api/documents", documentRoutes);          
+app.use("/api/documents", documentRoutes);
 app.use("/api/chat", chatRoutes);
+
+// =====================================================
+// ROUTE GAME KAHOOT
+// =====================================================
+const quizRoutes = require("./routes/quizRoutes");
+
+app.use("/api/quizzes", quizRoutes);
 
 // =====================================================
 // ROOT
 // =====================================================
 app.get("/", (req, res) => {
   res.status(200).json({
-    message: "Backend is running"
+    message: "Backend is running",
+    game: "Kahoot API ready",
   });
 });
 
@@ -45,11 +58,29 @@ app.get("/", (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     message: "API không tồn tại",
-    path: req.originalUrl
+    path: req.originalUrl,
   });
 });
+
+// =====================================================
+// HTTP SERVER + SOCKET.IO
+// =====================================================
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+// Đăng ký sự kiện game
+const registerQuizSocket = require("./sockets/quizSocket");
+registerQuizSocket(io);
 
 // =====================================================
 // EXPORT
 // =====================================================
 module.exports = app;
+module.exports.server = server;
+module.exports.io = io;
