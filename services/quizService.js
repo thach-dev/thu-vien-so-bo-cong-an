@@ -91,15 +91,26 @@ async function createQuiz(ownerId, title, questions) {
   return quiz;
 }
 
+// Lấy bài quiz để tổ chức chơi, không bắt buộc là chủ sở hữu
 async function getQuizForHost(quizId, ownerId) {
+  if (!quizId) {
+    throw new Error("Thiếu mã bài quiz.");
+  }
+
   const { data: quiz, error } = await supabase
     .from("quiz_games")
-    .select("id, title, created_at")
+    .select("id, title, created_at, owner_id")
     .eq("id", quizId)
-    .eq("owner_id", ownerId)
-    .single();
+    .maybeSingle();
 
-  if (error) throw error;
+  if (error) {
+    console.error("GET QUIZ ERROR:", error);
+    throw new Error("Không thể lấy bài quiz.");
+  }
+
+  if (!quiz) {
+    throw new Error("Không tìm thấy bài quiz.");
+  }
 
   const { data: questions, error: questionError } = await supabase
     .from("quiz_questions")
@@ -107,9 +118,19 @@ async function getQuizForHost(quizId, ownerId) {
     .eq("game_id", quizId)
     .order("question_order", { ascending: true });
 
-  if (questionError) throw questionError;
+  if (questionError) {
+    console.error("GET QUESTIONS ERROR:", questionError);
+    throw new Error("Không thể lấy câu hỏi của bài quiz.");
+  }
 
-  return { ...quiz, questions: questions || [] };
+  if (!questions || questions.length === 0) {
+    throw new Error("Bài quiz chưa có câu hỏi.");
+  }
+
+  return {
+    ...quiz,
+    questions,
+  };
 }
 
 async function getQuizForPlayer(quizId) {
