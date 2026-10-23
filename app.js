@@ -34,6 +34,7 @@ const chatRoutes = require("./routes/chatRoutes");
 app.use("/api/auth", authRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/quizzes", require("./routes/quizRoutes"));
 
 // =====================================================
 // ROUTE GAME KAHOOT
