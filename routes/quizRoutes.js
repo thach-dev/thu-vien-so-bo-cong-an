@@ -40,9 +40,11 @@ router.post(
   (req, res, next) => {
     upload.single("file")(req, res, (error) => {
       if (error) {
-        return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
-          message: error.message || "Không thể nhận file tải lên.",
-        });
+        return res
+          .status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400)
+          .json({
+            message: error.message || "Không thể nhận file tải lên.",
+          });
       }
 
       next();
@@ -51,7 +53,11 @@ router.post(
   quizController.createQuizFromFile
 );
 
-// Đặt route /:id sau route cố định /from-file.
+// Lấy danh sách Quiz của tài khoản đang đăng nhập.
+router.get("/", requireAuth, quizController.getMyQuizzes);
+
+// Lấy thông tin chi tiết một Quiz.
+// Đặt sau các route cố định như /from-file.
 router.get("/:id", requireAuth, quizController.getQuiz);
 
 module.exports = router;
