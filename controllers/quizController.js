@@ -1,10 +1,12 @@
-
 const path = require("path");
 const supabase = require("../supabase");
 const quizService = require("../services/quizService");
 const {
   generateQuizFromDocument,
 } = require("../services/geminiService");
+const {
+  readQuestionsFromExcel,
+} = require("../services/excelQuizService");
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 100000;
@@ -98,7 +100,7 @@ async function getDocumentText(documentId) {
 }
 
 // ==========================================
-// CHUẨN HÓA CÂU HỎI
+// CHUẨN HÓA CÂU HỎI TỪ AI
 // ==========================================
 function normalizeQuestions(generatedQuiz) {
   const questions = Array.isArray(generatedQuiz)
@@ -269,7 +271,7 @@ async function createQuiz(req, res) {
 }
 
 // ==========================================
-// TẠO QUIZ TỪ FILE UPLOAD
+// TẠO QUIZ TỪ FILE PDF, DOCX, TXT BẰNG AI
 // ==========================================
 async function createQuizFromFile(req, res) {
   try {
@@ -340,8 +342,77 @@ async function createQuizFromFile(req, res) {
     });
 
     return res.status(error.status || 500).json({
-      message:
-        error.message || "Không thể tạo Quiz từ file.",
+      message: error.message || "Không thể tạo Quiz từ file.",
+    });
+  }
+}
+
+// ==========================================
+// UPLOAD EXCEL VÀ LƯU QUIZ
+// ==========================================
+async function uploadExcelQuiz(req, res) {
+  try {
+    const ownerId = req.user?.id;
+
+    if (!ownerId) {
+      return res.status(401).json({
+        message: "Vui lòng đăng nhập.",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        message: "Vui lòng chọn file Excel.",
+      });
+    }
+
+    if (req.file.size > MAX_FILE_SIZE) {
+      return res.status(413).json({
+        message: "File Excel tối đa 10 MB.",
+      });
+    }
+
+    const extension = path
+      .extname(req.file.originalname || "")
+      .toLowerCase();
+
+    if (![".xlsx", ".xls"].includes(extension)) {
+      return res.status(400).json({
+        message: "Chỉ hỗ trợ file Excel .xlsx hoặc .xls.",
+      });
+    }
+
+    const fileTitle = path.basename(
+      req.file.originalname,
+      path.extname(req.file.originalname)
+    );
+
+    const title =
+      typeof req.body?.title === "string" && req.body.title.trim()
+        ? req.body.title.trim()
+        : fileTitle || "Quiz từ Excel";
+
+    const questions = readQuestionsFromExcel(req.file.buffer);
+
+    const quiz = await quizService.createQuiz(
+      ownerId,
+      title,
+      questions
+    );
+
+    return res.status(201).json({
+      message: "Upload Excel và lưu Quiz thành công.",
+      quiz,
+      total_questions: questions.length,
+    });
+  } catch (error) {
+    console.error("UPLOAD EXCEL QUIZ ERROR:", {
+      message: error.message,
+      stack: error.stack,
+    });
+
+    return res.status(error.status || 400).json({
+      message: error.message || "Không thể upload Excel.",
     });
   }
 }
@@ -376,7 +447,7 @@ async function getQuiz(req, res) {
 }
 
 // ==========================================
-// LẤY DANH SÁCH QUIZ CỦA TÀI KHOẢN
+// LẤY DANH SÁCH QUIZ CỦA NGƯỜI DÙNG
 // ==========================================
 async function getMyQuizzes(req, res) {
   try {
@@ -388,9 +459,7 @@ async function getMyQuizzes(req, res) {
       });
     }
 
-    if (
-      typeof quizService.getQuizzesForUser !== "function"
-    ) {
+    if (typeof quizService.getQuizzesForUser !== "function") {
       console.error(
         "quizService.getQuizzesForUser chưa được khai báo hoặc export."
       );
@@ -411,8 +480,7 @@ async function getMyQuizzes(req, res) {
     console.error("GET MY QUIZZES ERROR:", error);
 
     return res.status(500).json({
-      message:
-        error.message || "Không thể lấy danh sách Quiz.",
+      message: error.message || "Không thể lấy danh sách Quiz.",
     });
   }
 }
@@ -423,6 +491,7 @@ async function getMyQuizzes(req, res) {
 module.exports = {
   createQuiz,
   createQuizFromFile,
+  uploadExcelQuiz,
   getQuiz,
   getMyQuizzes,
   getDocumentText,
