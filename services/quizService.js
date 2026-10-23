@@ -133,16 +133,11 @@ async function getQuizForPlayer(quizId) {
 
   return { ...quiz, questions: questions || [] };
 }
-// Lấy danh sách bài quiz của người dùng để chọn tạo phòng
-async function getQuizzesForUser(ownerId) {
-  if (!ownerId) {
-    throw new Error("Không tìm thấy tài khoản đăng nhập.");
-  }
-
+// Lấy danh sách tất cả bài quiz để người dùng chọn tạo phòng
+async function getQuizzesForUser() {
   const { data, error } = await supabase
     .from("quiz_games")
-    .select("id, title, created_at")
-    .eq("owner_id", ownerId)
+    .select("id, title, created_at, owner_id")
     .order("created_at", { ascending: false });
 
   if (error) {
