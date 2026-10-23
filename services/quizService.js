@@ -133,9 +133,28 @@ async function getQuizForPlayer(quizId) {
 
   return { ...quiz, questions: questions || [] };
 }
+// Lấy danh sách bài quiz của người dùng để chọn tạo phòng
+async function getQuizzesForUser(ownerId) {
+  if (!ownerId) {
+    throw new Error("Không tìm thấy tài khoản đăng nhập.");
+  }
 
+  const { data, error } = await supabase
+    .from("quiz_games")
+    .select("id, title, created_at")
+    .eq("owner_id", ownerId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("GET QUIZZES ERROR:", error);
+    throw new Error("Không thể tải danh sách bài quiz.");
+  }
+
+  return data || [];
+}
 module.exports = {
   createQuiz,
   getQuizForHost,
   getQuizForPlayer,
+  getQuizzesForUser,
 };
