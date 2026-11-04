@@ -49,7 +49,8 @@ app.use("/api/quizzes", quizRoutes);
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "Backend is running",
-    game: "Kahoot API ready",
+    game: "Kahoot API ready" ,
+    googleScript: "Google Script API ready",
   });
 });
 // GOOGLE SCRIPTS

@@ -18,6 +18,8 @@ router.get("/connect", controller.connectGoogle);
 
 router.get("/status", controller.getGoogleStatus);
 
+router.get("/projects/:id/content", controller.getProjectContent);
+
 router.post("/projects", controller.createProject);
 
 router.get("/projects", controller.getProjects);
@@ -25,5 +27,6 @@ router.get("/projects", controller.getProjects);
 router.put("/projects/:id", controller.saveProject);
 
 router.delete("/disconnect", controller.disconnectGoogle);
+
 
 module.exports = router;

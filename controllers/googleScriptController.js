@@ -401,3 +401,46 @@ exports.disconnectGoogle = async (req, res) => {
         });
     }
 };
+
+// ============================================
+// LẤY NỘI DUNG PROJECT GOOGLE
+// ============================================
+exports.getProjectContent = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const projectId = req.params.id;
+
+        const { data: project, error } = await supabase
+            .from("script_projects")
+            .select("*")
+            .eq("id", projectId)
+            .eq("user_id", userId)
+            .single();
+
+        if (error || !project) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy project",
+            });
+        }
+
+        const { oauth2Client } = await getUserGoogleClient(userId);
+
+        const files = await getGoogleProjectContent(
+            oauth2Client,
+            project.google_script_id
+        );
+
+        return res.json({
+            success: true,
+            files,
+        });
+    } catch (error) {
+        console.error(error);
+
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};

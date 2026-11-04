@@ -103,9 +103,19 @@ async function saveGoogleProject(
 
     return response.data;
 }
+async function getGoogleProjectContent(oauth2Client, scriptId) {
+    const script = getAppsScript(oauth2Client);
+
+    const response = await script.projects.getContent({
+        scriptId,
+    });
+
+    return response.data.files || [];
+}
 
 module.exports = {
     generateAuthUrl,
+    getGoogleProjectContent,
     exchangeCode,
     getGoogleUser,
     createGoogleProject,
