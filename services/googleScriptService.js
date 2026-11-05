@@ -378,50 +378,54 @@ function createExecutionApiEntryPoint() {
 async function createGoogleDeployment(
     oauth2Client,
     scriptId,
-    versionNumber
+    versionNumber,
+    description = "Automatic deployment from Web IDE"
 ) {
-    if (!scriptId) {
-        throw new Error("Thiếu Google Apps Script Project ID.");
+    if (!oauth2Client) {
+        throw new Error("Thiếu OAuth2 Client.");
     }
 
-    if (!Number.isInteger(Number(versionNumber))) {
-        throw new Error("versionNumber không hợp lệ.");
+    if (!scriptId) {
+        throw new Error("Thiếu Google Apps Script ID.");
     }
+
+    if (!versionNumber || Number(versionNumber) <= 0) {
+        throw new Error("Version number không hợp lệ.");
+    }
+
+    const script = getAppsScript(oauth2Client);
 
     try {
-        const script = getAppsScript(oauth2Client);
-
         const response = await script.projects.deployments.create({
             scriptId,
-
             requestBody: {
                 versionNumber: Number(versionNumber),
-                description: "Automatic API Executable deployment",
-
-                entryPoints: [
-                    createExecutionApiEntryPoint(),
-                ],
+                description,
             },
         });
 
-        if (!response.data?.deploymentId) {
+        const deployment = response.data;
+
+        if (!deployment?.deploymentId) {
             throw new Error(
-                "Google không trả về Deployment ID."
+                "Google tạo deployment nhưng không trả về deploymentId."
             );
         }
 
-        console.log("CREATED API EXECUTABLE:", {
-            deploymentId: response.data.deploymentId,
+        console.log("CREATED GOOGLE DEPLOYMENT:", {
+            scriptId,
+            deploymentId: deployment.deploymentId,
             versionNumber,
-            entryPoints: response.data.entryPoints,
         });
 
-        return response.data;
+        return deployment;
     } catch (error) {
-        throw createGoogleError(
-            error,
-            "Google projects.deployments.create"
+        console.error(
+            "CREATE GOOGLE DEPLOYMENT ERROR:",
+            error.response?.data || error.message
         );
+
+        throw error;
     }
 }
 
@@ -433,58 +437,54 @@ async function updateGoogleDeployment(
     oauth2Client,
     scriptId,
     deploymentId,
-    versionNumber
+    versionNumber,
+    description = "Automatic deployment from Web IDE"
 ) {
+    if (!oauth2Client) {
+        throw new Error("Thiếu OAuth2 Client.");
+    }
+
     if (!scriptId) {
-        throw new Error("Thiếu Google Apps Script Project ID.");
+        throw new Error("Thiếu Google Apps Script ID.");
     }
 
     if (!deploymentId) {
         throw new Error("Thiếu Deployment ID.");
     }
 
-    if (!Number.isInteger(Number(versionNumber))) {
-        throw new Error("versionNumber không hợp lệ.");
+    if (!versionNumber || Number(versionNumber) <= 0) {
+        throw new Error("Version number không hợp lệ.");
     }
 
-    try {
-        const script = getAppsScript(oauth2Client);
+    const script = getAppsScript(oauth2Client);
 
+    try {
         const response = await script.projects.deployments.update({
             scriptId,
             deploymentId,
-
             requestBody: {
                 deploymentConfig: {
                     scriptId,
                     versionNumber: Number(versionNumber),
-                    description: "Updated automatically",
+                    description,
                 },
-
-                entryPoints: [
-                    createExecutionApiEntryPoint(),
-                ],
             },
         });
 
-        if (!response.data?.deploymentId) {
-            throw new Error(
-                "Google không trả về Deployment ID khi cập nhật."
-            );
-        }
-
-        console.log("UPDATED API EXECUTABLE:", {
-            deploymentId: response.data.deploymentId,
+        console.log("UPDATED GOOGLE DEPLOYMENT:", {
+            scriptId,
+            deploymentId,
             versionNumber,
-            entryPoints: response.data.entryPoints,
         });
 
         return response.data;
     } catch (error) {
-        throw createGoogleError(
-            error,
-            "Google projects.deployments.update"
+        console.error(
+            "UPDATE GOOGLE DEPLOYMENT ERROR:",
+            error.response?.data || error.message
         );
+
+        throw error;
     }
 }
 
@@ -530,51 +530,33 @@ async function runGoogleScript(
     functionName,
     parameters = []
 ) {
-    if (!deploymentId) {
-        throw new Error(
-            "Thiếu API Executable Deployment ID."
-        );
+    if (!oauth2Client) {
+        throw new Error("Thiếu OAuth2 Client.");
     }
 
-    if (
-        typeof functionName !== "string" ||
-        !functionName.trim()
-    ) {
-        throw new Error(
-            "Thiếu tên function cần thực thi."
-        );
+    if (!deploymentId) {
+        throw new Error("Thiếu API Executable Deployment ID.");
+    }
+
+    if (!functionName || typeof functionName !== "string") {
+        throw new Error("Tên function không hợp lệ.");
     }
 
     if (!Array.isArray(parameters)) {
-        throw new Error(
-            "Parameters phải là một mảng."
-        );
+        throw new Error("Parameters phải là một mảng.");
     }
 
+    const script = getAppsScript(oauth2Client);
+
     try {
-        const script = getAppsScript(oauth2Client);
-
-        console.log("\n========== GOOGLE SCRIPT RUN ==========");
-        console.log("Deployment ID:", deploymentId);
-        console.log("Function:", functionName);
-        console.log("Parameters:", parameters);
-        console.log("=======================================\n");
-
-        /*
-         * LƯU Ý:
-         * Google Apps Script REST API dùng deploymentId
-         * ở đường dẫn scripts/{deploymentId}:run.
-         *
-         * Trong googleapis Node.js client, tham số đường dẫn
-         * của scripts.run được truyền qua thuộc tính scriptId
-         * theo tên tham số của discovery client.
-         *
-         * Giá trị truyền vào đây vẫn phải là deploymentId.
-         */
+        console.log("RUN GOOGLE SCRIPT:", {
+            deploymentId,
+            functionName,
+            parameters,
+        });
 
         const response = await script.scripts.run({
             scriptId: deploymentId,
-
             requestBody: {
                 function: functionName.trim(),
                 parameters,
@@ -582,70 +564,39 @@ async function runGoogleScript(
             },
         });
 
-        const data = response.data;
+        const result = response.data;
 
-        console.log(
-            "GOOGLE SCRIPT RESPONSE:",
-            JSON.stringify(data, null, 2)
-        );
+        if (result.error) {
+            const executionError = result.error;
 
-        // Google trả lỗi trong response dù HTTP request thành công
-        if (data?.error) {
-            const executionError = data.error;
-
-            const details = Array.isArray(executionError.details)
-                ? executionError.details
-                : [];
-
-            const detailMessage = details
-                .map(item => {
-                    return (
-                        item?.errorMessage ||
-                        item?.message ||
-                        item?.scriptStackTraceElements
-                            ?.map(trace =>
-                                `${trace.function || "function"} (${trace.lineNumber || "?"})`
-                            )
-                            .join("\n") ||
-                        ""
-                    );
-                })
-                .filter(Boolean)
-                .join("\n");
-
-            const error = new Error(
-                detailMessage ||
+            const message =
+                executionError.details
+                    ?.map(item => item.errorMessage)
+                    .filter(Boolean)
+                    .join("\n") ||
                 executionError.message ||
-                "Google Apps Script thực thi thất bại."
-            );
+                "Google Apps Script thực thi thất bại.";
 
+            const error = new Error(message);
             error.googleError = executionError;
-            error.executionError = true;
 
             throw error;
         }
 
-        if (data?.done === false) {
-            throw new Error(
-                "Google chưa hoàn tất thực thi function."
-            );
-        }
+        console.log("GOOGLE SCRIPT EXECUTION SUCCESS:", {
+            deploymentId,
+            functionName,
+            response: result.response,
+        });
 
-        return {
-            success: true,
-            result: data?.response?.result ?? null,
-            executionId: data?.response?.executionId ?? null,
-            done: data?.done ?? true,
-        };
+        return result;
     } catch (error) {
-        if (error.googleError) {
-            throw error;
-        }
-
-        throw createGoogleError(
-            error,
-            "Google scripts.run"
+        console.error(
+            "RUN GOOGLE SCRIPT ERROR:",
+            error.response?.data || error.googleError || error.message
         );
+
+        throw error;
     }
 }
 
@@ -665,7 +616,6 @@ module.exports = {
     createGoogleProject,
     saveGoogleProject,
     getGoogleProjectContent,
-
     createGoogleVersion,
 
     createGoogleDeployment,
