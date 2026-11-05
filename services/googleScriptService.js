@@ -492,37 +492,27 @@ async function updateGoogleDeployment(
 // LẤY THÔNG TIN DEPLOYMENT
 // ============================================
 
+
 async function getGoogleDeployment(
     oauth2Client,
     scriptId,
     deploymentId
 ) {
-    if (!scriptId || !deploymentId) {
-        throw new Error(
-            "Thiếu Script ID hoặc Deployment ID."
-        );
-    }
+    const script = getAppsScript(oauth2Client);
 
-    try {
-        const script = getAppsScript(oauth2Client);
+    const response = await script.projects.deployments.get({
+        scriptId,
+        deploymentId,
+    });
 
-        const response = await script.projects.deployments.get({
-            scriptId,
-            deploymentId,
-        });
-
-        return response.data;
-    } catch (error) {
-        throw createGoogleError(
-            error,
-            "Google projects.deployments.get"
-        );
-    }
+    return response.data;
 }
+
 
 // ============================================
 // CHẠY GOOGLE APPS SCRIPT
 // ============================================
+
 
 async function runGoogleScript(
     oauth2Client,
@@ -530,31 +520,9 @@ async function runGoogleScript(
     functionName,
     parameters = []
 ) {
-    if (!oauth2Client) {
-        throw new Error("Thiếu OAuth2 Client.");
-    }
-
-    if (!deploymentId) {
-        throw new Error("Thiếu API Executable Deployment ID.");
-    }
-
-    if (!functionName || typeof functionName !== "string") {
-        throw new Error("Tên function không hợp lệ.");
-    }
-
-    if (!Array.isArray(parameters)) {
-        throw new Error("Parameters phải là một mảng.");
-    }
-
     const script = getAppsScript(oauth2Client);
 
     try {
-        console.log("RUN GOOGLE SCRIPT:", {
-            deploymentId,
-            functionName,
-            parameters,
-        });
-
         const response = await script.scripts.run({
             scriptId: deploymentId,
             requestBody: {
@@ -564,41 +532,20 @@ async function runGoogleScript(
             },
         });
 
-        const result = response.data;
-
-        if (result.error) {
-            const executionError = result.error;
-
-            const message =
-                executionError.details
-                    ?.map(item => item.errorMessage)
-                    .filter(Boolean)
-                    .join("\n") ||
-                executionError.message ||
-                "Google Apps Script thực thi thất bại.";
-
-            const error = new Error(message);
-            error.googleError = executionError;
-
-            throw error;
-        }
-
-        console.log("GOOGLE SCRIPT EXECUTION SUCCESS:", {
+        return response.data;
+    } catch (error) {
+        console.error("[GOOGLE scripts.run ERROR]", {
             deploymentId,
             functionName,
-            response: result.response,
+            message: error.message,
+            status: error.response?.status,
+            response: error.response?.data,
         });
-
-        return result;
-    } catch (error) {
-        console.error(
-            "RUN GOOGLE SCRIPT ERROR:",
-            error.response?.data || error.googleError || error.message
-        );
 
         throw error;
     }
 }
+
 
 // ============================================
 // EXPORT
@@ -607,21 +554,16 @@ async function runGoogleScript(
 module.exports = {
     SCOPES,
     REQUIRED_SCOPES,
-
     createOAuthClient,
     generateAuthUrl,
     exchangeCode,
     getGoogleUser,
-
     createGoogleProject,
     saveGoogleProject,
     getGoogleProjectContent,
-
     createGoogleVersion,
-
     createGoogleDeployment,
     updateGoogleDeployment,
     getGoogleDeployment,
-
     runGoogleScript,
 };

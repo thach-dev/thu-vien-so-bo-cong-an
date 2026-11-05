@@ -19,11 +19,12 @@ const {
     createGoogleVersion,
     createGoogleDeployment,
     updateGoogleDeployment,
+    getGoogleDeployment,
     runGoogleScript,
 } = require("../services/googleScriptService");
 
 // ============================================
-// CẤU HÌNH FRONTEND OAUTH
+// 1. CẤU HÌNH FRONTEND OAUTH
 // ============================================
 
 const ALLOWED_FRONTEND_ORIGINS = [
@@ -69,13 +70,14 @@ function redirectToFrontend(res, frontendOrigin, status) {
     }
 
     const redirectUrl = new URL("/script-ide", origin);
+
     redirectUrl.searchParams.set("google", status);
 
     return res.redirect(redirectUrl.toString());
 }
 
 // ============================================
-// CHUẨN HÓA LỖI
+// 2. CHUẨN HÓA LỖI
 // ============================================
 
 function getErrorMessage(error) {
@@ -135,21 +137,25 @@ function logGoogleError(label, error, stage = "") {
     console.error("Chức năng:", label);
     console.error("Giai đoạn:", stage || "Không xác định");
     console.error("Message:", getErrorMessage(error));
-    console.error("HTTP Status:", error?.response?.status);
+    console.error("HTTP Status:", error?.response?.status || null);
+
     console.error(
         "Google Response:",
         JSON.stringify(error?.response?.data || null, null, 2)
     );
-    console.error("Error Code:", error?.code);
-    console.error("Stack:", error?.stack);
+
+    console.error("Error Code:", error?.code || null);
+    console.error("Stack:", error?.stack || null);
     console.error("======================================\n");
 }
 
 // ============================================
-// LẤY GOOGLE CLIENT CỦA NGƯỜI DÙNG
+// 3. LẤY GOOGLE CLIENT CỦA NGƯỜI DÙNG
 // ============================================
 
 async function getUserGoogleClient(userId) {
+    console.log("[GOOGLE OAUTH] Tìm connection:", userId);
+
     const { data, error } = await supabase
         .from("google_connections")
         .select("*")
@@ -157,6 +163,8 @@ async function getUserGoogleClient(userId) {
         .single();
 
     if (error || !data) {
+        console.error("[GOOGLE OAUTH] Supabase error:", error);
+
         throw new Error("Bạn chưa kết nối tài khoản Google.");
     }
 
@@ -187,6 +195,7 @@ async function getUserGoogleClient(userId) {
     }
 
     const tokenInfo = await oauth2Client.getTokenInfo(token);
+
     const grantedScopes = tokenInfo.scopes || [];
 
     console.log("\n========== GOOGLE OAUTH CHECK ==========");
@@ -208,12 +217,20 @@ async function getUserGoogleClient(userId) {
 }
 
 // ============================================
-// KẾT NỐI GOOGLE
+// 4. KẾT NỐI GOOGLE
 // ============================================
 
 exports.connectGoogle = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
+
         const frontendOrigin = getFrontendOrigin(req);
 
         if (!frontendOrigin) {
@@ -247,7 +264,7 @@ exports.connectGoogle = async (req, res) => {
             url,
         });
     } catch (error) {
-        console.error("Connect Google:", error);
+        logGoogleError("Connect Google", error);
 
         return res.status(500).json({
             success: false,
@@ -257,14 +274,18 @@ exports.connectGoogle = async (req, res) => {
 };
 
 // ============================================
-// GOOGLE CALLBACK
+// 5. GOOGLE CALLBACK
 // ============================================
 
 exports.googleCallback = async (req, res) => {
     let frontendOrigin = DEFAULT_FRONTEND_URL;
 
     try {
-        const { code, state, error } = req.query;
+        const {
+            code,
+            state,
+            error,
+        } = req.query;
 
         if (!state || typeof state !== "string") {
             return res.status(400).send(
@@ -310,7 +331,7 @@ exports.googleCallback = async (req, res) => {
         }
 
         if (error) {
-            console.error("Google OAuth denied:", error);
+            console.error("[GOOGLE CALLBACK] OAuth denied:", error);
 
             return redirectToFrontend(
                 res,
@@ -327,7 +348,10 @@ exports.googleCallback = async (req, res) => {
             );
         }
 
-        const { oauth2Client, tokens } = await exchangeCode(code);
+        const {
+            oauth2Client,
+            tokens,
+        } = await exchangeCode(code);
 
         if (tokens.access_token) {
             const tokenInfo = await oauth2Client.getTokenInfo(
@@ -382,6 +406,8 @@ exports.googleCallback = async (req, res) => {
 
         if (saveError) throw saveError;
 
+        console.log("[GOOGLE CALLBACK] Connected:", googleUser.email);
+
         return redirectToFrontend(
             res,
             frontendOrigin,
@@ -399,15 +425,24 @@ exports.googleCallback = async (req, res) => {
 };
 
 // ============================================
-// KIỂM TRA TRẠNG THÁI GOOGLE
+// 6. KIỂM TRA TRẠNG THÁI GOOGLE
 // ============================================
 
 exports.getGoogleStatus = async (req, res) => {
     try {
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
+
         const { data, error } = await supabase
             .from("google_connections")
             .select("google_email")
-            .eq("user_id", req.user.id)
+            .eq("user_id", userId)
             .maybeSingle();
 
         if (error) throw error;
@@ -418,7 +453,7 @@ exports.getGoogleStatus = async (req, res) => {
             email: data?.google_email || null,
         });
     } catch (error) {
-        console.error("Get Google status:", error);
+        logGoogleError("Get Google status", error);
 
         return res.status(500).json({
             success: false,
@@ -428,17 +463,24 @@ exports.getGoogleStatus = async (req, res) => {
 };
 
 // ============================================
-// TẠO GOOGLE APPS SCRIPT PROJECT
+// 7. TẠO GOOGLE APPS SCRIPT PROJECT
 // ============================================
 
 exports.createProject = async (req, res) => {
     let stage = "Bắt đầu tạo project";
 
     try {
-        const userId = req.user.id;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
 
         const title = String(
-            req.body.title || "Untitled Project"
+            req.body?.title || "Untitled Project"
         ).trim();
 
         if (!title || title.length > 100) {
@@ -524,6 +566,13 @@ function createSheet() {
 
         if (error) throw error;
 
+        console.log("[CREATE PROJECT] Success:", {
+            projectId: data.id,
+            scriptId: project.scriptId,
+            deploymentId: deployment.deploymentId,
+            versionNumber: version.versionNumber,
+        });
+
         return res.status(201).json({
             success: true,
             project: data,
@@ -545,16 +594,23 @@ function createSheet() {
 };
 
 // ============================================
-// LƯU CODE VÀ CẬP NHẬT DEPLOYMENT
+// 8. LƯU CODE VÀ CẬP NHẬT DEPLOYMENT
 // ============================================
 
 exports.saveProject = async (req, res) => {
     let stage = "Bắt đầu lưu project";
 
     try {
-        const userId = req.user.id;
+        const userId = req.user?.id;
         const projectId = req.params.id;
-        const code = req.body.code;
+        const code = req.body?.code;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
 
         if (typeof code !== "string") {
             return res.status(400).json({
@@ -579,6 +635,7 @@ exports.saveProject = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: "Không tìm thấy project.",
+                detail: error?.message || null,
             });
         }
 
@@ -648,6 +705,13 @@ exports.saveProject = async (req, res) => {
 
         if (updateError) throw updateError;
 
+        console.log("[SAVE PROJECT] Success:", {
+            projectId,
+            scriptId: project.google_script_id,
+            deploymentId,
+            versionNumber: version.versionNumber,
+        });
+
         return res.json({
             success: true,
             message: "Đã lưu code và cập nhật deployment.",
@@ -667,15 +731,24 @@ exports.saveProject = async (req, res) => {
 };
 
 // ============================================
-// DANH SÁCH PROJECT
+// 9. DANH SÁCH PROJECT
 // ============================================
 
 exports.getProjects = async (req, res) => {
     try {
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
+
         const { data, error } = await supabase
             .from("script_projects")
             .select("*")
-            .eq("user_id", req.user.id)
+            .eq("user_id", userId)
             .order("created_at", {
                 ascending: false,
             });
@@ -687,7 +760,7 @@ exports.getProjects = async (req, res) => {
             projects: data || [],
         });
     } catch (error) {
-        console.error("Get projects:", error);
+        logGoogleError("Get projects", error);
 
         return res.status(500).json({
             success: false,
@@ -697,15 +770,24 @@ exports.getProjects = async (req, res) => {
 };
 
 // ============================================
-// NGẮT KẾT NỐI GOOGLE
+// 10. NGẮT KẾT NỐI GOOGLE
 // ============================================
 
 exports.disconnectGoogle = async (req, res) => {
     try {
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
+
         const { error } = await supabase
             .from("google_connections")
             .delete()
-            .eq("user_id", req.user.id);
+            .eq("user_id", userId);
 
         if (error) throw error;
 
@@ -714,7 +796,7 @@ exports.disconnectGoogle = async (req, res) => {
             message: "Đã ngắt kết nối Google.",
         });
     } catch (error) {
-        console.error("Disconnect Google:", error);
+        logGoogleError("Disconnect Google", error);
 
         return res.status(500).json({
             success: false,
@@ -724,15 +806,22 @@ exports.disconnectGoogle = async (req, res) => {
 };
 
 // ============================================
-// LẤY NỘI DUNG PROJECT
+// 11. LẤY NỘI DUNG PROJECT
 // ============================================
 
 exports.getProjectContent = async (req, res) => {
     let stage = "Bắt đầu lấy nội dung project";
 
     try {
-        const userId = req.user.id;
+        const userId = req.user?.id;
         const projectId = req.params.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
 
         stage = "Lấy project từ Supabase";
 
@@ -750,6 +839,7 @@ exports.getProjectContent = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: "Không tìm thấy project.",
+                detail: error?.message || null,
             });
         }
 
@@ -782,14 +872,29 @@ exports.getProjectContent = async (req, res) => {
 };
 
 // ============================================
-// CHẠY GOOGLE APPS SCRIPT
+// 12. CHẠY GOOGLE APPS SCRIPT
 // ============================================
 
 exports.runProject = async (req, res) => {
+    const requestId = crypto.randomUUID();
+
     let stage = "Bắt đầu thực thi Google Apps Script";
 
+    console.log("\n");
+    console.log("================================================");
+    console.log("          GOOGLE APPS SCRIPT RUN");
+    console.log("================================================");
+    console.log("Request ID:", requestId);
+    console.log("Time:", new Date().toISOString());
+
     try {
-        const { id } = req.params;
+        // ----------------------------------------
+        // BƯỚC 1: KIỂM TRA REQUEST
+        // ----------------------------------------
+
+        stage = "1. Kiểm tra request";
+
+        const projectId = req.params.id;
 
         const functionName =
             typeof req.body?.functionName === "string" &&
@@ -803,15 +908,30 @@ exports.runProject = async (req, res) => {
 
         const userId = req.user?.id;
 
+        console.log("[1] REQUEST:", {
+            requestId,
+            projectId,
+            userId,
+            functionName,
+            parametersCount: parameters.length,
+        });
+
         if (!userId) {
             return res.status(401).json({
                 success: false,
+                requestId,
+                stage,
                 message: "Vui lòng đăng nhập.",
             });
         }
 
-        // 1. Lấy project
-        stage = "1. Lấy project từ Supabase";
+        // ----------------------------------------
+        // BƯỚC 2: LẤY PROJECT TỪ SUPABASE
+        // ----------------------------------------
+
+        stage = "2. Lấy project từ Supabase";
+
+        console.log("[2] Đang truy vấn script_projects...");
 
         const {
             data: project,
@@ -819,53 +939,187 @@ exports.runProject = async (req, res) => {
         } = await supabase
             .from("script_projects")
             .select("*")
-            .eq("id", id)
+            .eq("id", projectId)
             .eq("user_id", userId)
             .single();
 
         if (error || !project) {
+            console.error("[2] SUPABASE ERROR:", error);
+
             return res.status(404).json({
                 success: false,
+                requestId,
+                stage,
                 message: "Không tìm thấy project.",
                 detail: error?.message || null,
             });
         }
 
-        if (!project.google_script_id) {
-            return res.status(400).json({
-                success: false,
-                message: "Project chưa có Google Apps Script ID.",
-            });
-        }
-
-        // 2. Kiểm tra deployment
-        if (!project.deployment_id) {
-            return res.status(400).json({
-                success: false,
-                stage: "Kiểm tra API Executable deployment",
-                message:
-                    "Project chưa có deployment. Hãy lưu project trước khi chạy.",
-            });
-        }
-
-        // 3. Lấy Google OAuth client
-        stage = "2. Lấy Google OAuth client";
-
-        const { oauth2Client, scopes } =
-            await getUserGoogleClient(userId);
-
-        console.log("RUN SCRIPT:", {
-            projectId: id,
-            googleScriptId: project.google_script_id,
-            deploymentId: project.deployment_id,
-            versionNumber: project.version_number,
-            functionName,
-            parametersCount: parameters.length,
-            scopes,
+        console.log("[2] SUPABASE PROJECT:", {
+            id: project.id,
+            title: project.title,
+            google_script_id: project.google_script_id,
+            deployment_id: project.deployment_id,
+            version_number: project.version_number,
+            updated_at: project.updated_at,
         });
 
-        // 4. Gọi Google Apps Script API
-        stage = "3. Google scripts.run - Thực thi function";
+        if (!project.google_script_id) {
+            throw new Error(
+                "Project chưa có google_script_id."
+            );
+        }
+
+        if (!project.deployment_id) {
+            throw new Error(
+                "Project chưa có deployment_id. Hãy lưu project trước khi chạy."
+            );
+        }
+
+        // ----------------------------------------
+        // BƯỚC 3: LẤY GOOGLE OAUTH CLIENT
+        // ----------------------------------------
+
+        stage = "3. Lấy Google OAuth client";
+
+        console.log("[3] Đang lấy Google OAuth client...");
+
+        const {
+            oauth2Client,
+            scopes,
+            connection,
+        } = await getUserGoogleClient(userId);
+
+        console.log("[3] GOOGLE ACCOUNT:", {
+            email: connection?.google_email,
+            googleUserId: connection?.google_user_id,
+        });
+
+        console.log("[3] GOOGLE SCOPES:", scopes);
+
+        // ----------------------------------------
+        // BƯỚC 4: KIỂM TRA DEPLOYMENT TRÊN GOOGLE
+        // ----------------------------------------
+
+        stage = "4. Google deployments.get - Kiểm tra deployment";
+
+        console.log("[4] DEPLOYMENT REQUEST:", {
+            scriptId: project.google_script_id,
+            deploymentId: project.deployment_id,
+        });
+
+        const deployment = await getGoogleDeployment(
+            oauth2Client,
+            project.google_script_id,
+            project.deployment_id
+        );
+
+        if (!deployment) {
+            throw new Error(
+                "Google không trả về thông tin deployment."
+            );
+        }
+
+        console.log("[4] GOOGLE DEPLOYMENT RESPONSE:");
+        console.log(JSON.stringify(deployment, null, 2));
+
+        const deploymentConfig =
+            deployment.deploymentConfig || {};
+
+        console.log("[4] DEPLOYMENT CONFIG:", {
+            scriptId: deploymentConfig.scriptId || null,
+            versionNumber: deploymentConfig.versionNumber || null,
+            description: deploymentConfig.description || null,
+        });
+
+        // ----------------------------------------
+        // BƯỚC 5: KIỂM TRA ENTRY POINT
+        // ----------------------------------------
+
+        stage = "5. Kiểm tra EXECUTION_API";
+
+        const entryPoints = Array.isArray(deployment.entryPoints)
+            ? deployment.entryPoints
+            : [];
+
+        const entryPointTypes = entryPoints.map(
+            entry => entry.entryPointType
+        );
+
+        const hasExecutionApi = entryPointTypes.includes(
+            "EXECUTION_API"
+        );
+
+        console.log("[5] ENTRY POINT CHECK:", {
+            hasExecutionApi,
+            entryPointTypes,
+            entryPoints,
+        });
+
+        // Không kết luận deployment sai nếu API không trả entryPoints.
+        // Nếu Google trả entryPoints rõ ràng nhưng không có EXECUTION_API,
+        // dừng lại để tránh chạy nhầm loại deployment.
+        if (
+            entryPoints.length > 0 &&
+            !hasExecutionApi
+        ) {
+            return res.status(400).json({
+                success: false,
+                requestId,
+                stage,
+                message:
+                    "Deployment hiện tại không có EXECUTION_API entry point.",
+                deployment: {
+                    deploymentId: project.deployment_id,
+                    deploymentConfig,
+                    entryPoints,
+                },
+            });
+        }
+
+        // ----------------------------------------
+        // BƯỚC 6: SO SÁNH VERSION
+        // ----------------------------------------
+
+        stage = "6. Kiểm tra version deployment";
+
+        const deployedVersion =
+            deploymentConfig.versionNumber || null;
+
+        const savedVersion =
+            project.version_number || null;
+
+        console.log("[6] VERSION CHECK:", {
+            supabaseVersion: savedVersion,
+            googleDeploymentVersion: deployedVersion,
+            matched:
+                deployedVersion !== null &&
+                Number(savedVersion) === Number(deployedVersion),
+        });
+
+        if (
+            deployedVersion !== null &&
+            savedVersion !== null &&
+            Number(savedVersion) !== Number(deployedVersion)
+        ) {
+            console.warn(
+                "[6] WARNING: Supabase version khác Google deployment version."
+            );
+        }
+
+        // ----------------------------------------
+        // BƯỚC 7: GỌI GOOGLE SCRIPTS.RUN
+        // ----------------------------------------
+
+        stage = "7. Google scripts.run - Thực thi function";
+
+        console.log("[7] RUN REQUEST:", {
+            scriptId: project.google_script_id,
+            deploymentId: project.deployment_id,
+            functionName,
+            parameters,
+            devMode: false,
+        });
 
         const result = await runGoogleScript(
             oauth2Client,
@@ -874,57 +1128,122 @@ exports.runProject = async (req, res) => {
             parameters
         );
 
-        console.log(
-            "GOOGLE SCRIPT RESULT:",
-            JSON.stringify(result, null, 2)
-        );
-        
-        console.log("RUN SCRIPT:", {
-            projectId: id,
-            googleScriptId: project.google_script_id,
-            deploymentId: project.deployment_id,
-            versionNumber: project.version_number,
-            functionName,
-            parameters,
-        });
-        // 5. Kiểm tra lỗi trong kết quả thực thi
+        console.log("[7] GOOGLE RAW RESULT:");
+        console.log(JSON.stringify(result, null, 2));
+
+        // ----------------------------------------
+        // BƯỚC 8: KIỂM TRA LỖI EXECUTION
+        // ----------------------------------------
+
+        stage = "8. Kiểm tra kết quả thực thi";
+
         if (result?.error) {
             const executionError = result.error;
 
+            const errorDetails = Array.isArray(
+                executionError.details
+            )
+                ? executionError.details
+                    .map(item => item.errorMessage)
+                    .filter(Boolean)
+                    .join("\n")
+                : null;
+
+            const message =
+                errorDetails ||
+                executionError.message ||
+                "Google Apps Script thực thi thất bại.";
+
+            console.error("[8] EXECUTION ERROR:", {
+                requestId,
+                message,
+                error: executionError,
+            });
+
             return res.status(400).json({
                 success: false,
+                requestId,
                 stage,
-                message:
-                    executionError.details ||
-                    executionError.message ||
-                    "Google Apps Script thực thi thất bại.",
+                message,
                 googleError: executionError,
             });
         }
 
+        // ----------------------------------------
+        // BƯỚC 9: LẤY KẾT QUẢ FUNCTION
+        // ----------------------------------------
+
+        stage = "9. Trả kết quả thực thi";
+
+        const executionResponse =
+            result?.response || {};
+
+        const returnValue =
+            executionResponse.result ?? null;
+
+        console.log("[9] EXECUTION SUCCESS:", {
+            requestId,
+            functionName,
+            returnValue,
+            executionId: result?.executionId || null,
+            deploymentId: project.deployment_id,
+            versionNumber: deployedVersion,
+        });
+
+        console.log("================================================");
+        console.log("          EXECUTION COMPLETED");
+        console.log("================================================\n");
+
         return res.status(200).json({
             success: true,
+            requestId,
             message: `Thực thi ${functionName} thành công.`,
             functionName,
-            result: result?.result ?? null,
-            executionId: result?.executionId ?? null,
+            result: returnValue,
+            executionId: result?.executionId || null,
+            deploymentId: project.deployment_id,
+            versionNumber: deployedVersion,
         });
+
     } catch (error) {
+        console.error("\n");
+        console.error("================================================");
+        console.error("          GOOGLE SCRIPT EXECUTION FAILED");
+        console.error("================================================");
+
+        console.error("Request ID:", requestId);
+        console.error("Stage:", stage);
+        console.error("Message:", getErrorMessage(error));
+        console.error("HTTP Status:", error?.response?.status || null);
+
+        console.error(
+            "Google Response:",
+            JSON.stringify(
+                error?.response?.data || null,
+                null,
+                2
+            )
+        );
+
+        console.error("Error Code:", error?.code || null);
+        console.error("Stack:", error?.stack || null);
+
+        console.error("================================================\n");
+
         logGoogleError(
             "Run Google Apps Script",
             error,
             stage
         );
 
-        const googleError = getGoogleErrorDetails(error);
-
         return res.status(
             error?.response?.status || 500
         ).json({
             success: false,
+            requestId,
             stage,
             message: getErrorMessage(error),
-            googleError,
+            googleError: getGoogleErrorDetails(error),
         });
     }
 };
