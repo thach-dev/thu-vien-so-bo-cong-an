@@ -50,7 +50,37 @@ async function exchangeCode(code) {
 
     const { tokens } = await oauth2Client.getToken(code);
 
+    if (!tokens.refresh_token) {
+        throw new Error(
+            "Google không cấp refresh token mới. Hãy ngắt kết nối và cấp quyền lại."
+        );
+    }
+
     oauth2Client.setCredentials(tokens);
+
+    // Kiểm tra các quyền Google thực tế cấp
+    const tokenInfo = await oauth2Client.getTokenInfo(
+        tokens.access_token
+    );
+
+    console.log("Google OAuth scopes:", tokenInfo.scopes);
+
+    const requiredScopes = [
+        "https://www.googleapis.com/auth/script.projects",
+        "https://www.googleapis.com/auth/script.deployments",
+    ];
+
+    const grantedScopes = tokenInfo.scopes || [];
+
+    const missingScopes = requiredScopes.filter(
+        scope => !grantedScopes.includes(scope)
+    );
+
+    if (missingScopes.length > 0) {
+        throw new Error(
+            `Google chưa cấp đủ quyền: ${missingScopes.join(", ")}`
+        );
+    }
 
     return {
         oauth2Client,

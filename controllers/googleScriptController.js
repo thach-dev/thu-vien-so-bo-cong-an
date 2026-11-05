@@ -297,13 +297,11 @@ async function getUserGoogleClient(userId) {
 
     if (error || !data) {
         throw new Error(
-            "Bạn chưa kết nối tài khoản Google"
+            "Bạn chưa kết nối tài khoản Google."
         );
     }
 
-    const refreshToken = decrypt(
-        data.refresh_token
-    );
+    const refreshToken = decrypt(data.refresh_token);
 
     const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
@@ -315,9 +313,25 @@ async function getUserGoogleClient(userId) {
         refresh_token: refreshToken,
     });
 
+    // Lấy access token mới từ refresh token
+    const { token } = await oauth2Client.getAccessToken();
+
+    if (!token) {
+        throw new Error(
+            "Không thể lấy Google access token. Hãy kết nối lại Google."
+        );
+    }
+
+    // Kiểm tra quyền thực tế của access token
+    const tokenInfo = await oauth2Client.getTokenInfo(token);
+
+    console.log("Google account:", data.google_email);
+    console.log("Granted scopes:", tokenInfo.scopes);
+
     return {
         oauth2Client,
         connection: data,
+        scopes: tokenInfo.scopes || [],
     };
 }
 
