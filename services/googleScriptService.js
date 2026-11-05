@@ -1,11 +1,20 @@
+
 const { google } = require("googleapis");
+
+// ============================================
+// GOOGLE OAUTH SCOPES
+// ============================================
 
 const SCOPES = [
     "openid",
-    "email",
-    "profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/script.projects",
 ];
+
+// ============================================
+// TẠO OAUTH CLIENT
+// ============================================
 
 function createOAuthClient() {
     return new google.auth.OAuth2(
@@ -15,16 +24,26 @@ function createOAuthClient() {
     );
 }
 
+// ============================================
+// TẠO GOOGLE AUTH URL
+// ============================================
+
 function generateAuthUrl(state) {
     const oauth2Client = createOAuthClient();
 
     return oauth2Client.generateAuthUrl({
         access_type: "offline",
         prompt: "consent",
+        response_type: "code",
+        include_granted_scopes: true,
         scope: SCOPES,
         state,
     });
 }
+
+// ============================================
+// ĐỔI CODE LẤY TOKEN
+// ============================================
 
 async function exchangeCode(code) {
     const oauth2Client = createOAuthClient();
@@ -38,6 +57,10 @@ async function exchangeCode(code) {
         tokens,
     };
 }
+
+// ============================================
+// LẤY THÔNG TIN TÀI KHOẢN GOOGLE
+// ============================================
 
 async function getGoogleUser(oauth2Client) {
     const oauth2 = google.oauth2({
@@ -53,12 +76,20 @@ async function getGoogleUser(oauth2Client) {
     };
 }
 
+// ============================================
+// GOOGLE APPS SCRIPT API
+// ============================================
+
 function getAppsScript(oauth2Client) {
     return google.script({
         version: "v1",
         auth: oauth2Client,
     });
 }
+
+// ============================================
+// TẠO GOOGLE APPS SCRIPT PROJECT
+// ============================================
 
 async function createGoogleProject(oauth2Client, title) {
     const script = getAppsScript(oauth2Client);
@@ -71,6 +102,10 @@ async function createGoogleProject(oauth2Client, title) {
 
     return response.data;
 }
+
+// ============================================
+// LƯU CODE LÊN GOOGLE APPS SCRIPT
+// ============================================
 
 async function saveGoogleProject(
     oauth2Client,
@@ -103,7 +138,15 @@ async function saveGoogleProject(
 
     return response.data;
 }
-async function getGoogleProjectContent(oauth2Client, scriptId) {
+
+// ============================================
+// LẤY NỘI DUNG GOOGLE APPS SCRIPT PROJECT
+// ============================================
+
+async function getGoogleProjectContent(
+    oauth2Client,
+    scriptId
+) {
     const script = getAppsScript(oauth2Client);
 
     const response = await script.projects.getContent({
@@ -113,11 +156,15 @@ async function getGoogleProjectContent(oauth2Client, scriptId) {
     return response.data.files || [];
 }
 
+// ============================================
+// EXPORT
+// ============================================
+
 module.exports = {
     generateAuthUrl,
-    getGoogleProjectContent,
     exchangeCode,
     getGoogleUser,
     createGoogleProject,
     saveGoogleProject,
+    getGoogleProjectContent,
 };

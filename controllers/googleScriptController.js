@@ -1,4 +1,6 @@
+
 const crypto = require("crypto");
+const { google } = require("googleapis");
 
 const supabase = require("../config/supabase");
 
@@ -13,23 +15,69 @@ const {
     getGoogleUser,
     createGoogleProject,
     saveGoogleProject,
+    getGoogleProjectContent,
 } = require("../services/googleScriptService");
 
-const { google } = require("googleapis");
+// ============================================
+// CẤU HÌNH FRONTEND ĐƯỢC PHÉP OAUTH
+// ============================================
 
-// Hàm hỗ trợ tự động nhận diện domain (Localhost hoặc Vercel Production)
-const getFrontendUrl = (req) => {
-    const origin = req.get("origin") || req.get("referer");
-    if (origin && origin.includes("localhost")) {
-        try {
-            const urlObj = new URL(origin);
-            return `${urlObj.protocol}//${urlObj.host}`;
-        } catch (e) {
-            // Bỏ qua nếu parse lỗi
+const ALLOWED_FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "https://thu-vien-so-bca.netlify.app",
+];
+
+// Frontend production mặc định
+const DEFAULT_FRONTEND_URL =
+    process.env.FRONTEND_URL ||
+    "https://thu-vien-so-bca.netlify.app";
+
+// Kiểm tra và lấy frontend origin hợp lệ
+function getAllowedFrontendOrigin(value) {
+    if (!value) return null;
+
+    try {
+        const url = new URL(value);
+        const origin = url.origin;
+
+        if (ALLOWED_FRONTEND_ORIGINS.includes(origin)) {
+            return origin;
         }
+
+        return null;
+    } catch {
+        return null;
     }
-    return process.env.FRONTEND_URL || "https://thu-vien-so-bo-cong-an.vercel.app";
-};
+}
+
+// Lấy frontend từ request khi bắt đầu OAuth
+function getFrontendOrigin(req) {
+    const origin =
+        req.get("origin") ||
+        req.get("referer");
+
+    if (!origin) {
+        return getAllowedFrontendOrigin(DEFAULT_FRONTEND_URL);
+    }
+
+    return getAllowedFrontendOrigin(origin);
+}
+
+// Tạo URL chuyển hướng về frontend
+function redirectToFrontend(res, frontendOrigin, status) {
+    const origin =
+        getAllowedFrontendOrigin(frontendOrigin) ||
+        getAllowedFrontendOrigin(DEFAULT_FRONTEND_URL);
+
+    const redirectUrl = new URL(
+        "/script-ide",
+        origin
+    );
+
+    redirectUrl.searchParams.set("google", status);
+
+    return res.redirect(redirectUrl.toString());
+}
 
 // ============================================
 // LẤY OAUTH URL
@@ -39,17 +87,32 @@ exports.connectGoogle = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const state = crypto.randomBytes(32).toString("hex");
+        // Xác định frontend đang sử dụng
+        const frontendOrigin = getFrontendOrigin(req);
+
+        if (!frontendOrigin) {
+            return res.status(403).json({
+                success: false,
+                message: "Frontend không được phép kết nối Google",
+            });
+        }
+
+        // Tạo state ngẫu nhiên
+        const state = crypto
+            .randomBytes(32)
+            .toString("hex");
 
         const expiresAt = new Date(
             Date.now() + 10 * 60 * 1000
         ).toISOString();
 
+        // Lưu state và frontend origin vào Supabase
         const { error } = await supabase
             .from("google_oauth_states")
             .insert({
                 state,
                 user_id: userId,
+                frontend_origin: frontendOrigin,
                 expires_at: expiresAt,
             });
 
@@ -61,6 +124,7 @@ exports.connectGoogle = async (req, res) => {
             success: true,
             url,
         });
+
     } catch (error) {
         console.error("Connect Google:", error);
 
@@ -76,35 +140,39 @@ exports.connectGoogle = async (req, res) => {
 // ============================================
 
 exports.googleCallback = async (req, res) => {
-    const FRONTEND_URL = getFrontendUrl(req);
+    let frontendOrigin = DEFAULT_FRONTEND_URL;
 
     try {
         const { code, state, error } = req.query;
 
-        if (error) {
-            return res.redirect(
-                `${FRONTEND_URL}/script-ide?google=denied`
-            );
-        }
-
-        if (!code || !state) {
+        // Nếu không có state, không thể xác định frontend
+        if (!state || typeof state !== "string") {
             return res.status(400).send(
-                "Thiếu code hoặc state OAuth"
+                "Thiếu hoặc không hợp lệ OAuth state"
             );
         }
 
-        const { data: stateData, error: stateError } =
-            await supabase
-                .from("google_oauth_states")
-                .select("*")
-                .eq("state", state)
-                .single();
+        // Lấy OAuth state từ Supabase
+        const {
+            data: stateData,
+            error: stateError,
+        } = await supabase
+            .from("google_oauth_states")
+            .select("*")
+            .eq("state", state)
+            .single();
 
         if (stateError || !stateData) {
             return res.status(400).send(
-                "OAuth state không hợp lệ"
+                "OAuth state không hợp lệ hoặc đã được sử dụng"
             );
         }
+
+        // Lấy frontend origin đã lưu lúc bắt đầu OAuth
+        frontendOrigin =
+            getAllowedFrontendOrigin(
+                stateData.frontend_origin
+            ) || DEFAULT_FRONTEND_URL;
 
         // Xóa state ngay khi sử dụng để chống replay
         const { error: deleteError } = await supabase
@@ -114,34 +182,69 @@ exports.googleCallback = async (req, res) => {
 
         if (deleteError) throw deleteError;
 
-        if (new Date(stateData.expires_at).getTime() < Date.now()) {
-            return res.status(400).send(
-                "OAuth state đã hết hạn"
+        // Kiểm tra thời hạn
+        if (
+            new Date(stateData.expires_at).getTime() <
+            Date.now()
+        ) {
+            return redirectToFrontend(
+                res,
+                frontendOrigin,
+                "expired"
             );
         }
 
-        const { oauth2Client, tokens } =
-            await exchangeCode(code);
+        // Người dùng từ chối cấp quyền
+        if (error) {
+            console.error("Google OAuth denied:", error);
 
-        const googleUser = await getGoogleUser(oauth2Client);
+            return redirectToFrontend(
+                res,
+                frontendOrigin,
+                "denied"
+            );
+        }
 
+        if (!code) {
+            return redirectToFrontend(
+                res,
+                frontendOrigin,
+                "failed"
+            );
+        }
+
+        // Đổi authorization code lấy token
+        const {
+            oauth2Client,
+            tokens,
+        } = await exchangeCode(code);
+
+        // Lấy thông tin tài khoản Google
+        const googleUser = await getGoogleUser(
+            oauth2Client
+        );
+
+        // Kiểm tra kết nối Google hiện tại
         const { data: existing } = await supabase
             .from("google_connections")
             .select("refresh_token")
             .eq("user_id", stateData.user_id)
             .maybeSingle();
 
-        const refreshToken =
-            tokens.refresh_token
-                ? encrypt(tokens.refresh_token)
-                : existing?.refresh_token;
+        // Giữ refresh token cũ nếu Google không trả token mới
+        const refreshToken = tokens.refresh_token
+            ? encrypt(tokens.refresh_token)
+            : existing?.refresh_token;
 
         if (!refreshToken) {
-            return res.redirect(
-                `${FRONTEND_URL}/script-ide?google=token_missing`
+            return redirectToFrontend(
+                res,
+                frontendOrigin,
+                "token_missing"
             );
         }
 
+        // Lưu kết nối Google
         const { error: saveError } = await supabase
             .from("google_connections")
             .upsert(
@@ -159,14 +262,20 @@ exports.googleCallback = async (req, res) => {
 
         if (saveError) throw saveError;
 
-        return res.redirect(
-            `${FRONTEND_URL}/script-ide?google=connected`
+        // Chuyển về đúng frontend đã bắt đầu OAuth
+        return redirectToFrontend(
+            res,
+            frontendOrigin,
+            "connected"
         );
+
     } catch (error) {
         console.error("Google callback:", error);
 
-        return res.redirect(
-            `${FRONTEND_URL}/script-ide?google=failed`
+        return redirectToFrontend(
+            res,
+            frontendOrigin,
+            "failed"
         );
     }
 };
@@ -183,10 +292,14 @@ async function getUserGoogleClient(userId) {
         .single();
 
     if (error || !data) {
-        throw new Error("Bạn chưa kết nối tài khoản Google");
+        throw new Error(
+            "Bạn chưa kết nối tài khoản Google"
+        );
     }
 
-    const refreshToken = decrypt(data.refresh_token);
+    const refreshToken = decrypt(
+        data.refresh_token
+    );
 
     const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
@@ -223,6 +336,7 @@ exports.getGoogleStatus = async (req, res) => {
             connected: !!data,
             email: data?.google_email || null,
         });
+
     } catch (error) {
         console.error(error);
 
@@ -241,8 +355,9 @@ exports.createProject = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const title =
-            String(req.body.title || "Untitled Project").trim();
+        const title = String(
+            req.body.title || "Untitled Project"
+        ).trim();
 
         if (!title || title.length > 100) {
             return res.status(400).json({
@@ -260,7 +375,9 @@ exports.createProject = async (req, res) => {
         );
 
         if (!project.scriptId) {
-            throw new Error("Google không trả về scriptId");
+            throw new Error(
+                "Google không trả về scriptId"
+            );
         }
 
         // Khởi tạo file nguồn ban đầu
@@ -286,6 +403,7 @@ exports.createProject = async (req, res) => {
             success: true,
             project: data,
         });
+
     } catch (error) {
         console.error("Create project:", error);
 
@@ -304,7 +422,6 @@ exports.saveProject = async (req, res) => {
     try {
         const userId = req.user.id;
         const projectId = req.params.id;
-
         const code = req.body.code;
 
         if (typeof code !== "string") {
@@ -349,6 +466,7 @@ exports.saveProject = async (req, res) => {
             success: true,
             message: "Đã lưu code lên Google Apps Script",
         });
+
     } catch (error) {
         console.error("Save project:", error);
 
@@ -379,6 +497,7 @@ exports.getProjects = async (req, res) => {
             success: true,
             projects: data || [],
         });
+
     } catch (error) {
         console.error(error);
 
@@ -406,6 +525,7 @@ exports.disconnectGoogle = async (req, res) => {
             success: true,
             message: "Đã ngắt kết nối Google",
         });
+
     } catch (error) {
         console.error(error);
 
@@ -419,6 +539,7 @@ exports.disconnectGoogle = async (req, res) => {
 // ============================================
 // LẤY NỘI DUNG PROJECT GOOGLE
 // ============================================
+
 exports.getProjectContent = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -438,7 +559,8 @@ exports.getProjectContent = async (req, res) => {
             });
         }
 
-        const { oauth2Client } = await getUserGoogleClient(userId);
+        const { oauth2Client } =
+            await getUserGoogleClient(userId);
 
         const files = await getGoogleProjectContent(
             oauth2Client,
@@ -449,12 +571,13 @@ exports.getProjectContent = async (req, res) => {
             success: true,
             files,
         });
+
     } catch (error) {
-        console.error(error);
+        console.error("Get project content:", error);
 
         return res.status(500).json({
             success: false,
-            message: error.message,
+            message: error.message || "Không thể lấy nội dung project",
         });
     }
 };
