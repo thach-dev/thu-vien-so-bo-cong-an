@@ -787,97 +787,75 @@ exports.getProjectContent = async (req, res) => {
 // ============================================
 
 exports.runProject = async (req, res) => {
-    let stage = "Bắt đầu chạy script";
-
     try {
-        const userId = req.user.id;
-        const projectId = req.params.id;
-
-        const functionName = String(
-            req.body.functionName || ""
-        ).trim();
-
-        const parameters = req.body.parameters || [];
-
-        if (!functionName) {
-            return res.status(400).json({
-                success: false,
-                message: "Bạn chưa chọn function.",
-            });
-        }
-
-        if (!Array.isArray(parameters)) {
-            return res.status(400).json({
-                success: false,
-                message: "Parameters phải là một mảng.",
-            });
-        }
-
-        // Lấy project
-        stage = "Lấy project từ Supabase";
+        const { id } = req.params;
 
         const {
-            data: project,
-            error,
-        } = await supabase
+            functionName = "myFunction",
+            parameters = [],
+        } = req.body;
+
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập",
+            });
+        }
+
+        // 1. Lấy project từ Supabase
+        const { data: project, error } = await supabase
             .from("script_projects")
             .select("*")
-            .eq("id", projectId)
+            .eq("id", id)
             .eq("user_id", userId)
             .single();
 
         if (error || !project) {
             return res.status(404).json({
                 success: false,
-                message: "Không tìm thấy project.",
+                message: "Không tìm thấy project",
             });
         }
 
-        if (!project.deployment_id) {
+        // 2. Phải dùng Google Script ID, không dùng Deployment ID
+        if (!project.google_script_id) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Project chưa được triển khai API Executable. Hãy lưu project để tạo deployment.",
+                message: "Project chưa có Google Apps Script ID",
             });
         }
 
-        // Lấy Google client
-        stage = "Lấy Google OAuth client";
+        // 3. Lấy OAuth Google
+        const {
+            oauth2Client,
+        } = await getUserGoogleClient(userId);
 
-        const { oauth2Client } =
-            await getUserGoogleClient(userId);
-
-        // Chạy function
-        stage = "Google scripts.run - Thực thi function";
-
+        // 4. Gọi Google Apps Script API
         const result = await runGoogleScript(
             oauth2Client,
-            project.deployment_id,
+            project.google_script_id,
             functionName,
             parameters
         );
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Thực thi thành công.",
+            message: `Thực thi ${functionName} thành công`,
             functionName,
-            result,
+            result: result.result,
+            executionId: result.executionId,
         });
 
     } catch (error) {
-        logGoogleError("Run Google Script", error, stage);
-
-        const googleMessage =
-            error.response?.data?.error?.message ||
-            error.message;
+        console.error("RUN PROJECT ERROR:", error);
 
         return res.status(500).json({
             success: false,
-            stage,
-            message:
-                googleMessage ||
-                "Không thể thực thi script.",
-            googleError: error.response?.data?.error || null,
+            stage: "Google scripts.run - Thực thi function",
+            message: error.message,
+            googleError: error.response?.data || null,
         });
     }
 };

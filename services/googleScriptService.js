@@ -257,49 +257,46 @@ async function updateGoogleDeployment(
 
 async function runGoogleScript(
     oauth2Client,
-    deploymentId,
+    scriptId,
     functionName,
     parameters = []
 ) {
-    if (!deploymentId) {
-        throw new Error(
-            "Project chưa có API Executable deployment."
-        );
+    if (!scriptId) {
+        throw new Error("Thiếu Google Apps Script ID");
     }
 
     if (!functionName) {
-        throw new Error("Tên function không hợp lệ.");
+        throw new Error("Thiếu tên function cần thực thi");
     }
 
-    const script = getAppsScript(oauth2Client);
+    const script = google.script({
+        version: "v1",
+        auth: oauth2Client,
+    });
 
     const response = await script.scripts.run({
-        scriptId: deploymentId,
+        scriptId: scriptId,
         requestBody: {
             function: functionName,
-            parameters,
+            parameters: parameters,
         },
     });
 
-    const result = response.data;
+    const data = response.data;
 
-    if (result.error) {
-        const detail = result.error.details?.[0];
-
+    if (data.error) {
         throw new Error(
-            detail?.errorMessage ||
-            result.error.message ||
-            "Google Apps Script thực thi thất bại."
+            data.error.details ||
+            data.error.message ||
+            "Google Apps Script thực thi thất bại"
         );
     }
 
-    if (result.done === false) {
-        throw new Error(
-            "Google chưa hoàn thành quá trình thực thi."
-        );
-    }
-
-    return result.response?.result ?? null;
+    return {
+        success: true,
+        result: data.response?.result ?? null,
+        executionId: data.response?.executionId ?? null,
+    };
 }
 
 // ============================================
