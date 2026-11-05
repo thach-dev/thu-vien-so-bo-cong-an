@@ -9,17 +9,9 @@ const SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
-
-    // Tạo và chỉnh sửa Apps Script
     "https://www.googleapis.com/auth/script.projects",
-
-    // Tạo và cập nhật deployment
     "https://www.googleapis.com/auth/script.deployments",
-
-    // Thực thi Apps Script
     "https://www.googleapis.com/auth/script.scriptapp",
-
-    // Truy cập Google Drive khi cần
     "https://www.googleapis.com/auth/drive",
 ];
 
