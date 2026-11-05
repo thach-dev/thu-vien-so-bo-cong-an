@@ -39,8 +39,7 @@ function getAllowedFrontendOrigin(value) {
     if (!value) return null;
 
     try {
-        const url = new URL(value);
-        const origin = url.origin;
+        const origin = new URL(value).origin;
 
         return ALLOWED_FRONTEND_ORIGINS.includes(origin)
             ? origin
@@ -51,9 +50,7 @@ function getAllowedFrontendOrigin(value) {
 }
 
 function getFrontendOrigin(req) {
-    const origin =
-        req.get("origin") ||
-        req.get("referer");
+    const origin = req.get("origin") || req.get("referer");
 
     if (!origin) {
         return getAllowedFrontendOrigin(DEFAULT_FRONTEND_URL);
@@ -67,28 +64,84 @@ function redirectToFrontend(res, frontendOrigin, status) {
         getAllowedFrontendOrigin(frontendOrigin) ||
         getAllowedFrontendOrigin(DEFAULT_FRONTEND_URL);
 
-    const redirectUrl = new URL("/script-ide", origin);
+    if (!origin) {
+        return res.status(500).send("Frontend URL không hợp lệ.");
+    }
 
+    const redirectUrl = new URL("/script-ide", origin);
     redirectUrl.searchParams.set("google", status);
 
     return res.redirect(redirectUrl.toString());
 }
 
 // ============================================
-// HÀM GHI LOG LỖI GOOGLE API
+// CHUẨN HÓA LỖI
 // ============================================
+
+function getErrorMessage(error) {
+    const googleError = error?.response?.data?.error;
+
+    if (typeof googleError === "string") {
+        return googleError;
+    }
+
+    if (googleError?.message) {
+        return googleError.message;
+    }
+
+    if (typeof error?.message === "string" && error.message) {
+        return error.message;
+    }
+
+    if (typeof error === "string") {
+        return error;
+    }
+
+    if (error && typeof error === "object") {
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return "Đã xảy ra lỗi không xác định.";
+        }
+    }
+
+    return "Đã xảy ra lỗi không xác định.";
+}
+
+function getGoogleErrorDetails(error) {
+    const responseData = error?.response?.data;
+
+    if (responseData) {
+        return responseData;
+    }
+
+    if (error?.error) {
+        return error.error;
+    }
+
+    if (error && typeof error === "object") {
+        return {
+            code: error.code || null,
+            message: getErrorMessage(error),
+            stack: error.stack || null,
+        };
+    }
+
+    return null;
+}
 
 function logGoogleError(label, error, stage = "") {
     console.error("\n========== GOOGLE API ERROR ==========");
     console.error("Chức năng:", label);
     console.error("Giai đoạn:", stage || "Không xác định");
-    console.error("Message:", error?.message);
+    console.error("Message:", getErrorMessage(error));
     console.error("HTTP Status:", error?.response?.status);
     console.error(
         "Google Response:",
-        JSON.stringify(error?.response?.data || {}, null, 2)
+        JSON.stringify(error?.response?.data || null, null, 2)
     );
     console.error("Error Code:", error?.code);
+    console.error("Stack:", error?.stack);
     console.error("======================================\n");
 }
 
@@ -104,9 +157,7 @@ async function getUserGoogleClient(userId) {
         .single();
 
     if (error || !data) {
-        throw new Error(
-            "Bạn chưa kết nối tài khoản Google."
-        );
+        throw new Error("Bạn chưa kết nối tài khoản Google.");
     }
 
     if (!data.refresh_token) {
@@ -127,7 +178,6 @@ async function getUserGoogleClient(userId) {
         refresh_token: refreshToken,
     });
 
-    // Lấy access token mới
     const { token } = await oauth2Client.getAccessToken();
 
     if (!token) {
@@ -136,9 +186,7 @@ async function getUserGoogleClient(userId) {
         );
     }
 
-    // Kiểm tra quyền OAuth thực tế
     const tokenInfo = await oauth2Client.getTokenInfo(token);
-
     const grantedScopes = tokenInfo.scopes || [];
 
     console.log("\n========== GOOGLE OAUTH CHECK ==========");
@@ -166,7 +214,6 @@ async function getUserGoogleClient(userId) {
 exports.connectGoogle = async (req, res) => {
     try {
         const userId = req.user.id;
-
         const frontendOrigin = getFrontendOrigin(req);
 
         if (!frontendOrigin) {
@@ -176,9 +223,7 @@ exports.connectGoogle = async (req, res) => {
             });
         }
 
-        const state = crypto
-            .randomBytes(32)
-            .toString("hex");
+        const state = crypto.randomBytes(32).toString("hex");
 
         const expiresAt = new Date(
             Date.now() + 10 * 60 * 1000
@@ -201,15 +246,12 @@ exports.connectGoogle = async (req, res) => {
             success: true,
             url,
         });
-
     } catch (error) {
         console.error("Connect Google:", error);
 
         return res.status(500).json({
             success: false,
-            message:
-                error.message ||
-                "Không thể tạo liên kết Google OAuth.",
+            message: getErrorMessage(error),
         });
     }
 };
@@ -222,11 +264,7 @@ exports.googleCallback = async (req, res) => {
     let frontendOrigin = DEFAULT_FRONTEND_URL;
 
     try {
-        const {
-            code,
-            state,
-            error,
-        } = req.query;
+        const { code, state, error } = req.query;
 
         if (!state || typeof state !== "string") {
             return res.status(400).send(
@@ -250,11 +288,9 @@ exports.googleCallback = async (req, res) => {
         }
 
         frontendOrigin =
-            getAllowedFrontendOrigin(
-                stateData.frontend_origin
-            ) || DEFAULT_FRONTEND_URL;
+            getAllowedFrontendOrigin(stateData.frontend_origin) ||
+            DEFAULT_FRONTEND_URL;
 
-        // Xóa state sau khi sử dụng
         const { error: deleteError } = await supabase
             .from("google_oauth_states")
             .delete()
@@ -262,7 +298,6 @@ exports.googleCallback = async (req, res) => {
 
         if (deleteError) throw deleteError;
 
-        // Kiểm tra thời hạn
         if (
             new Date(stateData.expires_at).getTime() <
             Date.now()
@@ -274,7 +309,6 @@ exports.googleCallback = async (req, res) => {
             );
         }
 
-        // Người dùng từ chối cấp quyền
         if (error) {
             console.error("Google OAuth denied:", error);
 
@@ -293,13 +327,8 @@ exports.googleCallback = async (req, res) => {
             );
         }
 
-        // Đổi authorization code lấy token
-        const {
-            oauth2Client,
-            tokens,
-        } = await exchangeCode(code);
+        const { oauth2Client, tokens } = await exchangeCode(code);
 
-        // Kiểm tra scope ngay sau khi OAuth
         if (tokens.access_token) {
             const tokenInfo = await oauth2Client.getTokenInfo(
                 tokens.access_token
@@ -311,22 +340,19 @@ exports.googleCallback = async (req, res) => {
             console.log("======================================\n");
         }
 
-        // Lấy thông tin tài khoản Google
-        const googleUser = await getGoogleUser(
-            oauth2Client
-        );
+        const googleUser = await getGoogleUser(oauth2Client);
 
-        // Kiểm tra kết nối Google hiện tại
-        const { data: existing, error: existingError } =
-            await supabase
-                .from("google_connections")
-                .select("refresh_token")
-                .eq("user_id", stateData.user_id)
-                .maybeSingle();
+        const {
+            data: existing,
+            error: existingError,
+        } = await supabase
+            .from("google_connections")
+            .select("refresh_token")
+            .eq("user_id", stateData.user_id)
+            .maybeSingle();
 
         if (existingError) throw existingError;
 
-        // Giữ refresh token cũ nếu Google không trả token mới
         const refreshToken = tokens.refresh_token
             ? encrypt(tokens.refresh_token)
             : existing?.refresh_token;
@@ -339,7 +365,6 @@ exports.googleCallback = async (req, res) => {
             );
         }
 
-        // Lưu kết nối Google
         const { error: saveError } = await supabase
             .from("google_connections")
             .upsert(
@@ -362,7 +387,6 @@ exports.googleCallback = async (req, res) => {
             frontendOrigin,
             "connected"
         );
-
     } catch (error) {
         logGoogleError("Google Callback", error);
 
@@ -393,13 +417,12 @@ exports.getGoogleStatus = async (req, res) => {
             connected: !!data,
             email: data?.google_email || null,
         });
-
     } catch (error) {
         console.error("Get Google status:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Không thể kiểm tra trạng thái Google.",
+            message: getErrorMessage(error),
         });
     }
 };
@@ -430,7 +453,6 @@ exports.createProject = async (req, res) => {
         const { oauth2Client } =
             await getUserGoogleClient(userId);
 
-        // 1. Tạo Apps Script project
         stage = "Tạo Google Apps Script project";
 
         const project = await createGoogleProject(
@@ -438,13 +460,10 @@ exports.createProject = async (req, res) => {
             title
         );
 
-        if (!project.scriptId) {
-            throw new Error(
-                "Google không trả về scriptId."
-            );
+        if (!project?.scriptId) {
+            throw new Error("Google không trả về scriptId.");
         }
 
-        // 2. Code mặc định
         const initialCode = `
 function myFunction() {
     const message = "Hello Google Apps Script!";
@@ -459,7 +478,6 @@ function createSheet() {
 }
 `;
 
-        // 3. Lưu code
         stage = "Lưu source code ban đầu";
 
         await saveGoogleProject(
@@ -468,7 +486,6 @@ function createSheet() {
             initialCode
         );
 
-        // 4. Tạo version
         stage = "Tạo version đầu tiên";
 
         const version = await createGoogleVersion(
@@ -477,7 +494,6 @@ function createSheet() {
             "Initial version"
         );
 
-        // 5. Tạo deployment
         stage = "Tạo API Executable deployment";
 
         const deployment = await createGoogleDeployment(
@@ -486,13 +502,12 @@ function createSheet() {
             version.versionNumber
         );
 
-        if (!deployment.deploymentId) {
+        if (!deployment?.deploymentId) {
             throw new Error(
                 "Google không trả về deploymentId."
             );
         }
 
-        // 6. Lưu Supabase
         stage = "Lưu project vào Supabase";
 
         const { data, error } = await supabase
@@ -517,17 +532,14 @@ function createSheet() {
                 versionNumber: version.versionNumber,
             },
         });
-
     } catch (error) {
         logGoogleError("Create project", error, stage);
 
         return res.status(500).json({
             success: false,
             stage,
-            message:
-                error.message ||
-                "Không thể tạo project.",
-            googleError: error.response?.data?.error || null,
+            message: getErrorMessage(error),
+            googleError: getGoogleErrorDetails(error),
         });
     }
 };
@@ -551,7 +563,6 @@ exports.saveProject = async (req, res) => {
             });
         }
 
-        // Lấy project
         stage = "Lấy project từ Supabase";
 
         const {
@@ -571,13 +582,11 @@ exports.saveProject = async (req, res) => {
             });
         }
 
-        // Lấy Google client
         stage = "Lấy Google OAuth client";
 
         const { oauth2Client } =
             await getUserGoogleClient(userId);
 
-        // BƯỚC 1: Cập nhật source code
         stage = "1. Google projects.updateContent - Lưu source code";
 
         await saveGoogleProject(
@@ -586,7 +595,6 @@ exports.saveProject = async (req, res) => {
             code
         );
 
-        // BƯỚC 2: Tạo version
         stage = "2. Google projects.versions.create - Tạo version";
 
         const version = await createGoogleVersion(
@@ -597,7 +605,6 @@ exports.saveProject = async (req, res) => {
 
         let deployment;
 
-        // BƯỚC 3: Cập nhật hoặc tạo deployment
         if (project.deployment_id) {
             stage = "3. Google projects.deployments.update - Cập nhật deployment";
 
@@ -618,7 +625,7 @@ exports.saveProject = async (req, res) => {
         }
 
         const deploymentId =
-            deployment.deploymentId ||
+            deployment?.deploymentId ||
             project.deployment_id;
 
         if (!deploymentId) {
@@ -627,7 +634,6 @@ exports.saveProject = async (req, res) => {
             );
         }
 
-        // BƯỚC 4: Cập nhật Supabase
         stage = "4. Cập nhật thông tin project trong Supabase";
 
         const { error: updateError } = await supabase
@@ -648,17 +654,14 @@ exports.saveProject = async (req, res) => {
             deploymentId,
             versionNumber: version.versionNumber,
         });
-
     } catch (error) {
         logGoogleError("Save project", error, stage);
 
         return res.status(500).json({
             success: false,
             stage,
-            message:
-                error.message ||
-                "Không thể lưu project.",
-            googleError: error.response?.data?.error || null,
+            message: getErrorMessage(error),
+            googleError: getGoogleErrorDetails(error),
         });
     }
 };
@@ -683,13 +686,12 @@ exports.getProjects = async (req, res) => {
             success: true,
             projects: data || [],
         });
-
     } catch (error) {
         console.error("Get projects:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Không thể lấy danh sách project.",
+            message: getErrorMessage(error),
         });
     }
 };
@@ -711,13 +713,12 @@ exports.disconnectGoogle = async (req, res) => {
             success: true,
             message: "Đã ngắt kết nối Google.",
         });
-
     } catch (error) {
         console.error("Disconnect Google:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Không thể ngắt kết nối Google.",
+            message: getErrorMessage(error),
         });
     }
 };
@@ -768,16 +769,14 @@ exports.getProjectContent = async (req, res) => {
             success: true,
             files,
         });
-
     } catch (error) {
         logGoogleError("Get project content", error, stage);
 
         return res.status(500).json({
             success: false,
             stage,
-            message:
-                error.message ||
-                "Không thể lấy nội dung project.",
+            message: getErrorMessage(error),
+            googleError: getGoogleErrorDetails(error),
         });
     }
 };
@@ -787,25 +786,37 @@ exports.getProjectContent = async (req, res) => {
 // ============================================
 
 exports.runProject = async (req, res) => {
+    let stage = "Bắt đầu thực thi Google Apps Script";
+
     try {
         const { id } = req.params;
 
-        const {
-            functionName = "myFunction",
-            parameters = [],
-        } = req.body;
+        const functionName =
+            typeof req.body?.functionName === "string" &&
+            req.body.functionName.trim()
+                ? req.body.functionName.trim()
+                : "myFunction";
+
+        const parameters = Array.isArray(req.body?.parameters)
+            ? req.body.parameters
+            : [];
 
         const userId = req.user?.id;
 
         if (!userId) {
             return res.status(401).json({
                 success: false,
-                message: "Vui lòng đăng nhập",
+                message: "Vui lòng đăng nhập.",
             });
         }
 
-        // 1. Lấy project từ Supabase
-        const { data: project, error } = await supabase
+        // 1. Lấy project
+        stage = "1. Lấy project từ Supabase";
+
+        const {
+            data: project,
+            error,
+        } = await supabase
             .from("script_projects")
             .select("*")
             .eq("id", id)
@@ -815,24 +826,47 @@ exports.runProject = async (req, res) => {
         if (error || !project) {
             return res.status(404).json({
                 success: false,
-                message: "Không tìm thấy project",
+                message: "Không tìm thấy project.",
+                detail: error?.message || null,
             });
         }
 
-        // 2. Phải dùng Google Script ID, không dùng Deployment ID
         if (!project.google_script_id) {
             return res.status(400).json({
                 success: false,
-                message: "Project chưa có Google Apps Script ID",
+                message: "Project chưa có Google Apps Script ID.",
             });
         }
 
-        // 3. Lấy OAuth Google
-        const {
-            oauth2Client,
-        } = await getUserGoogleClient(userId);
+        // 2. Kiểm tra deployment
+        if (!project.deployment_id) {
+            return res.status(400).json({
+                success: false,
+                stage: "Kiểm tra API Executable deployment",
+                message:
+                    "Project chưa có deployment. Hãy lưu project trước khi chạy.",
+            });
+        }
+
+        // 3. Lấy Google OAuth client
+        stage = "2. Lấy Google OAuth client";
+
+        const { oauth2Client, scopes } =
+            await getUserGoogleClient(userId);
+
+        console.log("RUN SCRIPT:", {
+            projectId: id,
+            googleScriptId: project.google_script_id,
+            deploymentId: project.deployment_id,
+            versionNumber: project.version_number,
+            functionName,
+            parametersCount: parameters.length,
+            scopes,
+        });
 
         // 4. Gọi Google Apps Script API
+        stage = "3. Google scripts.run - Thực thi function";
+
         const result = await runGoogleScript(
             oauth2Client,
             project.google_script_id,
@@ -840,22 +874,49 @@ exports.runProject = async (req, res) => {
             parameters
         );
 
+        console.log(
+            "GOOGLE SCRIPT RESULT:",
+            JSON.stringify(result, null, 2)
+        );
+
+        // 5. Kiểm tra lỗi trong kết quả thực thi
+        if (result?.error) {
+            const executionError = result.error;
+
+            return res.status(400).json({
+                success: false,
+                stage,
+                message:
+                    executionError.details ||
+                    executionError.message ||
+                    "Google Apps Script thực thi thất bại.",
+                googleError: executionError,
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            message: `Thực thi ${functionName} thành công`,
+            message: `Thực thi ${functionName} thành công.`,
             functionName,
-            result: result.result,
-            executionId: result.executionId,
+            result: result?.result ?? null,
+            executionId: result?.executionId ?? null,
         });
-
     } catch (error) {
-        console.error("RUN PROJECT ERROR:", error);
+        logGoogleError(
+            "Run Google Apps Script",
+            error,
+            stage
+        );
 
-        return res.status(500).json({
+        const googleError = getGoogleErrorDetails(error);
+
+        return res.status(
+            error?.response?.status || 500
+        ).json({
             success: false,
-            stage: "Google scripts.run - Thực thi function",
-            message: error.message,
-            googleError: error.response?.data || null,
+            stage,
+            message: getErrorMessage(error),
+            googleError,
         });
     }
 };

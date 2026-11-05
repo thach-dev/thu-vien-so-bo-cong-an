@@ -285,11 +285,17 @@ async function runGoogleScript(
     const data = response.data;
 
     if (data.error) {
-        throw new Error(
-            data.error.details ||
-            data.error.message ||
-            "Google Apps Script thực thi thất bại"
-        );
+        if (data.error) {
+            const details = data.error.details;
+
+            throw new Error(
+                typeof details === "string"
+                    ? details
+                    : data.error.message ||
+                    JSON.stringify(details) ||
+                    "Google Apps Script thực thi thất bại"
+            );
+        }
     }
 
     return {
