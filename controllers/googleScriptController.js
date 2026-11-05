@@ -869,7 +869,7 @@ exports.runProject = async (req, res) => {
 
         const result = await runGoogleScript(
             oauth2Client,
-            project.google_script_id,
+            project.deployment_id,
             functionName,
             parameters
         );
@@ -878,7 +878,15 @@ exports.runProject = async (req, res) => {
             "GOOGLE SCRIPT RESULT:",
             JSON.stringify(result, null, 2)
         );
-
+        
+        console.log("RUN SCRIPT:", {
+            projectId: id,
+            googleScriptId: project.google_script_id,
+            deploymentId: project.deployment_id,
+            versionNumber: project.version_number,
+            functionName,
+            parameters,
+        });
         // 5. Kiểm tra lỗi trong kết quả thực thi
         if (result?.error) {
             const executionError = result.error;
