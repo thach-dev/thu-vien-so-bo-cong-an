@@ -10,14 +10,17 @@ const SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 
-    // Đọc và cập nhật mã nguồn Apps Script
+    // Tạo và chỉnh sửa Apps Script
     "https://www.googleapis.com/auth/script.projects",
 
-    // Tạo và quản lý deployment
+    // Tạo và cập nhật deployment
     "https://www.googleapis.com/auth/script.deployments",
 
-    // Quyền thực thi Apps Script API
-    "https://www.googleapis.com/auth/script.webapp.deploy",
+    // Thực thi Apps Script
+    "https://www.googleapis.com/auth/script.scriptapp",
+
+    // Truy cập Google Drive khi cần
+    "https://www.googleapis.com/auth/drive",
 ];
 
 // ============================================
