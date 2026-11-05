@@ -498,31 +498,72 @@ async function getGoogleDeployment(
     deploymentId
 ) {
     if (!scriptId || !deploymentId) {
-        throw new Error(
-            "Thiếu Script ID hoặc Deployment ID."
-        );
+        throw new Error("Thiếu Script ID hoặc Deployment ID.");
     }
 
-    try {
-        const script = getAppsScript(oauth2Client);
+    const script = getAppsScript(oauth2Client);
 
+    try {
         const response = await script.projects.deployments.get({
             scriptId,
             deploymentId,
         });
 
+        console.log("GOOGLE DEPLOYMENT INFO:", {
+            scriptId,
+            deploymentId,
+            deployment: response.data,
+        });
+
         return response.data;
     } catch (error) {
-        throw createGoogleError(
-            error,
-            "Google projects.deployments.get"
+        console.error(
+            "GET GOOGLE DEPLOYMENT ERROR:",
+            error.response?.data || error.message
         );
+
+        throw error;
     }
 }
 
 // ============================================
 // CHẠY GOOGLE APPS SCRIPT
 // ============================================
+// Kiểm tra deployment trước khi thực thi
+const deployment = await getGoogleDeployment(
+    oauth2Client,
+    project.google_script_id,
+    project.deployment_id
+);
+
+console.log("DEPLOYMENT CHECK:", {
+    supabaseProjectId: project.id,
+    googleScriptId: project.google_script_id,
+    deploymentId: project.deployment_id,
+    deploymentConfig: deployment.deploymentConfig,
+    entryPoints: deployment.entryPoints,
+});
+
+// Kiểm tra API Executable
+const isApiExecutable = deployment.entryPoints?.some(
+    entry => entry.entryPointType === "EXECUTION_API"
+);
+
+if (!isApiExecutable) {
+    throw new Error(
+        "Deployment hiện tại không có API Executable entry point. Cần tạo deployment đúng loại."
+    );
+}
+
+// Thực thi function
+const result = await runGoogleScript(
+    oauth2Client,
+    project.deployment_id,
+    functionName,
+    parameters
+);
+
+
 
 async function runGoogleScript(
     oauth2Client,
