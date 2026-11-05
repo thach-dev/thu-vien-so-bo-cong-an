@@ -17,7 +17,19 @@ const {
 
 const { google } = require("googleapis");
 
-const FRONTEND_URL = process.env.FRONTEND_URL;
+// Hàm hỗ trợ tự động nhận diện domain (Localhost hoặc Vercel Production)
+const getFrontendUrl = (req) => {
+    const origin = req.get("origin") || req.get("referer");
+    if (origin && origin.includes("localhost")) {
+        try {
+            const urlObj = new URL(origin);
+            return `${urlObj.protocol}//${urlObj.host}`;
+        } catch (e) {
+            // Bỏ qua nếu parse lỗi
+        }
+    }
+    return process.env.FRONTEND_URL || "https://thu-vien-so-bo-cong-an.vercel.app";
+};
 
 // ============================================
 // LẤY OAUTH URL
@@ -64,6 +76,8 @@ exports.connectGoogle = async (req, res) => {
 // ============================================
 
 exports.googleCallback = async (req, res) => {
+    const FRONTEND_URL = getFrontendUrl(req);
+
     try {
         const { code, state, error } = req.query;
 
