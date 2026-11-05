@@ -9,8 +9,15 @@ const SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
+
+    // Đọc và cập nhật mã nguồn Apps Script
     "https://www.googleapis.com/auth/script.projects",
+
+    // Tạo và quản lý deployment
     "https://www.googleapis.com/auth/script.deployments",
+
+    // Quyền thực thi Apps Script API
+    "https://www.googleapis.com/auth/script.webapp.deploy",
 ];
 
 // ============================================
