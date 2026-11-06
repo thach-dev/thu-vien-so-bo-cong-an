@@ -261,15 +261,15 @@ async function saveGoogleProject(
             {
                 name: "appsscript",
                 type: "JSON",
-                source: JSON.stringify(
-                    {
-                        timeZone: "Asia/Ho_Chi_Minh",
-                        exceptionLogging: "STACKDRIVER",
-                        runtimeVersion: "V8",
-                    },
-                    null,
-                    2
-                ),
+                source: JSON.stringify({
+                    timeZone: "Asia/Ho_Chi_Minh",
+                    dependencies: {},
+                    exceptionLogging: "STACKDRIVER",
+                    runtimeVersion: "V8",
+                    executionApi: {
+                        access: "MYSELF"
+                    }
+                }, null, 2)
             },
             ...additionalFiles,
         ];
