@@ -146,6 +146,7 @@ function logGoogleError(label, error, stage = "") {
     console.error("Chức năng:", label);
     console.error("Giai đoạn:", stage || "Không xác định");
     console.error("Message:", getErrorMessage(error));
+
     console.error(
         "HTTP Status:",
         error?.response?.status || error?.status || null
@@ -693,9 +694,8 @@ exports.confirmCloudProjectLink = async (req, res) => {
             });
         }
 
-        // Lưu xác nhận của người dùng.
-        // Apps Script API không cung cấp phương thức công khai
-        // để controller tự xác minh Cloud Project association.
+        // Chỉ ghi nhận xác nhận của người dùng.
+        // Không phải xác minh tự động từ Google.
 
         stage = "Cập nhật trạng thái trong Supabase";
 
@@ -824,7 +824,7 @@ exports.saveProject = async (req, res) => {
             );
         }
 
-        // Project chưa được người dùng xác nhận liên kết Cloud Project.
+        // Project chưa được xác nhận liên kết Cloud Project.
         // Vẫn lưu source và version, nhưng không tạo deployment.
 
         if (project.cloud_project_status !== "LINKED") {
@@ -1274,7 +1274,7 @@ exports.runProject = async (req, res) => {
             throw new Error("Project chưa có google_script_id.");
         }
 
-        // Chặn chạy nếu chưa xác nhận liên kết.
+        // Chặn chạy nếu chưa xác nhận liên kết Cloud Project.
         if (project.cloud_project_status !== "LINKED") {
             return res.status(403).json({
                 success: false,
@@ -1404,6 +1404,10 @@ exports.runProject = async (req, res) => {
             );
         }
 
+        // ========================================
+        // SỬA LỖI QUAN TRỌNG TẠI ĐÂY
+        // ========================================
+
         stage = "7. Google scripts.run - Thực thi function";
 
         console.log("[7] RUN REQUEST:", {
@@ -1414,13 +1418,13 @@ exports.runProject = async (req, res) => {
             devMode: false,
         });
 
-        // QUAN TRỌNG:
-        // Google Apps Script API scripts.run nhận SCRIPT ID,
-        // KHÔNG nhận deployment ID.
+        // Google scripts.run cần Deployment ID của API Executable.
+        // Trong service, tham số đường dẫn của googleapis tên là scriptId,
+        // nhưng giá trị truyền vào phải là project.deployment_id.
 
         const result = await runGoogleScript(
             oauth2Client,
-            project.google_script_id,
+            project.deployment_id,
             functionName,
             parameters
         );
@@ -1481,6 +1485,7 @@ exports.runProject = async (req, res) => {
             returnValue,
             executionId: result?.executionId || null,
             scriptId: project.google_script_id,
+            deploymentId: project.deployment_id,
             versionNumber: deployedVersion,
         });
 
