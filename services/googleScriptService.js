@@ -2,6 +2,41 @@
 const { google } = require("googleapis");
 
 // ============================================
+// GOOGLE CLOUD PROJECT CẤU HÌNH CHUNG
+// ============================================
+
+const GOOGLE_CLOUD_PROJECT_NUMBER = "852592387337";
+
+// URL mở Apps Script Editor.
+// Mỗi project sẽ có URL riêng dựa trên scriptId.
+function getGoogleScriptEditorUrl(scriptId) {
+    if (!scriptId) return null;
+
+    return `https://script.google.com/d/${scriptId}/edit`;
+}
+
+// Thông tin hướng dẫn liên kết Cloud Project.
+// Lưu ý: Đây là thông tin hướng dẫn, không phải API tự liên kết.
+function getGoogleProjectSetupInfo(scriptId) {
+    return {
+        targetCloudProjectNumber: GOOGLE_CLOUD_PROJECT_NUMBER,
+        cloudProjectLinked: false,
+        requiresCloudProjectLinking: true,
+        cloudProjectLinkMethod: "MANUAL",
+        scriptId,
+        editorUrl: getGoogleScriptEditorUrl(scriptId),
+        instructions: [
+            "Mở Apps Script Editor của project.",
+            "Vào Project Settings.",
+            "Tìm mục Google Cloud Platform (GCP) Project.",
+            "Chọn Change project.",
+            `Nhập Project Number: ${GOOGLE_CLOUD_PROJECT_NUMBER}`,
+            "Nhấn Set project để hoàn tất."
+        ]
+    };
+}
+
+// ============================================
 // GOOGLE OAUTH SCOPES
 // ============================================
 
@@ -10,10 +45,12 @@ const SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 
+    // Apps Script
     "https://www.googleapis.com/auth/script.projects",
     "https://www.googleapis.com/auth/script.deployments",
     "https://www.googleapis.com/auth/script.scriptapp",
 
+    // Google Drive
     "https://www.googleapis.com/auth/drive",
 ];
 
@@ -208,21 +245,60 @@ function getAppsScript(oauth2Client) {
 
 async function createGoogleProject(oauth2Client, title) {
     try {
+        if (!oauth2Client) {
+            throw new Error("Thiếu OAuth2 Client.");
+        }
+
+        if (!title || typeof title !== "string") {
+            throw new Error("Tên Apps Script project không hợp lệ.");
+        }
+
         const script = getAppsScript(oauth2Client);
 
         const response = await script.projects.create({
             requestBody: {
-                title,
+                title: title.trim(),
             },
         });
 
-        if (!response.data?.scriptId) {
+        const project = response.data;
+
+        if (!project?.scriptId) {
             throw new Error(
                 "Google không trả về scriptId khi tạo project."
             );
         }
 
-        return response.data;
+        // Thông tin Cloud Project mục tiêu.
+        // Không được hiểu cloudProjectLinked=true ở bước này.
+        const setupInfo = getGoogleProjectSetupInfo(
+            project.scriptId
+        );
+
+        const result = {
+            ...project,
+            ...setupInfo,
+        };
+
+        console.log("\n========== NEW APPS SCRIPT PROJECT ==========");
+        console.log("Title:", result.title);
+        console.log("Script ID:", result.scriptId);
+        console.log(
+            "Target Cloud Project Number:",
+            result.targetCloudProjectNumber
+        );
+        console.log(
+            "Cloud Project Linked:",
+            result.cloudProjectLinked
+        );
+        console.log(
+            "Requires Manual Linking:",
+            result.requiresCloudProjectLinking
+        );
+        console.log("Editor URL:", result.editorUrl);
+        console.log("=============================================\n");
+
+        return result;
 
     } catch (error) {
         throw createGoogleError(
@@ -262,15 +338,19 @@ async function saveGoogleProject(
             {
                 name: "appsscript",
                 type: "JSON",
-                source: JSON.stringify({
-                    timeZone: "Asia/Ho_Chi_Minh",
-                    dependencies: {},
-                    exceptionLogging: "STACKDRIVER",
-                    runtimeVersion: "V8",
-                    executionApi: {
-                        access: "MYSELF",
+                source: JSON.stringify(
+                    {
+                        timeZone: "Asia/Ho_Chi_Minh",
+                        dependencies: {},
+                        exceptionLogging: "STACKDRIVER",
+                        runtimeVersion: "V8",
+                        executionApi: {
+                            access: "MYSELF",
+                        },
                     },
-                }, null, 2),
+                    null,
+                    2
+                ),
             },
             ...additionalFiles,
         ];
@@ -385,10 +465,6 @@ async function createGoogleDeployment(
     try {
         const script = getAppsScript(oauth2Client);
 
-        // CREATE:
-        // requestBody là DeploymentConfig trực tiếp.
-        // Không bọc trong deploymentConfig.
-
         const response = await script.projects.deployments.create({
             scriptId,
             requestBody: {
@@ -409,7 +485,6 @@ async function createGoogleDeployment(
             scriptId,
             deploymentId: deployment.deploymentId,
             versionNumber,
-            deploymentConfig: deployment.deploymentConfig,
             entryPoints: deployment.entryPoints,
         });
 
@@ -458,9 +533,6 @@ async function updateGoogleDeployment(
     try {
         const script = getAppsScript(oauth2Client);
 
-        // UPDATE:
-        // Google yêu cầu cấu hình nằm trong deploymentConfig.
-
         const response = await script.projects.deployments.update({
             scriptId,
             deploymentId,
@@ -478,7 +550,6 @@ async function updateGoogleDeployment(
             deploymentId,
             versionNumber,
             returnedDeploymentId: response.data?.deploymentId,
-            deploymentConfig: response.data?.deploymentConfig,
             entryPoints: response.data?.entryPoints,
         });
 
@@ -595,10 +666,8 @@ async function runGoogleScript(
         });
 
         const response = await script.scripts.run({
-            // API scripts.run yêu cầu Deployment ID.
-            // googleapis đặt tên tham số là scriptId,
-            // nhưng giá trị truyền vào phải là deploymentId.
-
+            // Apps Script API scripts.run sử dụng deployment ID
+            // tại tham số đường dẫn scriptId của googleapis.
             scriptId: deploymentId,
 
             requestBody: {
@@ -644,18 +713,27 @@ async function runGoogleScript(
 // ============================================
 
 module.exports = {
+    GOOGLE_CLOUD_PROJECT_NUMBER,
+
     SCOPES,
     REQUIRED_SCOPES,
+
     createOAuthClient,
     generateAuthUrl,
     exchangeCode,
     getGoogleUser,
+
     createGoogleProject,
+    getGoogleProjectSetupInfo,
+    getGoogleScriptEditorUrl,
+
     saveGoogleProject,
     getGoogleProjectContent,
+
     createGoogleVersion,
     createGoogleDeployment,
     updateGoogleDeployment,
     getGoogleDeployment,
+
     runGoogleScript,
 };
