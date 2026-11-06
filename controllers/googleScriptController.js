@@ -24,8 +24,10 @@ const {
 } = require("../services/googleScriptService");
 
 // ============================================
-// 1. CẤU HÌNH FRONTEND OAUTH
+// 1. CẤU HÌNH
 // ============================================
+
+const GOOGLE_CLOUD_PROJECT_NUMBER = "852592387337";
 
 const ALLOWED_FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -35,6 +37,12 @@ const ALLOWED_FRONTEND_ORIGINS = [
 const DEFAULT_FRONTEND_URL =
     process.env.FRONTEND_URL ||
     "https://thu-vien-so-bca.netlify.app";
+
+function getGoogleScriptEditorUrl(scriptId) {
+    if (!scriptId) return null;
+
+    return `https://script.google.com/d/${scriptId}/edit`;
+}
 
 function getAllowedFrontendOrigin(value) {
     if (!value) return null;
@@ -349,29 +357,17 @@ exports.googleCallback = async (req, res) => {
         if (deleteError) throw deleteError;
 
         if (new Date(stateData.expires_at).getTime() < Date.now()) {
-            return redirectToFrontend(
-                res,
-                frontendOrigin,
-                "expired"
-            );
+            return redirectToFrontend(res, frontendOrigin, "expired");
         }
 
         if (error) {
             console.error("[GOOGLE CALLBACK] OAuth denied:", error);
 
-            return redirectToFrontend(
-                res,
-                frontendOrigin,
-                "denied"
-            );
+            return redirectToFrontend(res, frontendOrigin, "denied");
         }
 
         if (!code) {
-            return redirectToFrontend(
-                res,
-                frontendOrigin,
-                "failed"
-            );
+            return redirectToFrontend(res, frontendOrigin, "failed");
         }
 
         const {
@@ -546,7 +542,7 @@ function createSheet() {
 }
 `;
 
-        stage = "Lưu source code và cấu hình API Executable";
+        stage = "Lưu source code và cấu hình Apps Script";
 
         await saveGoogleProject(
             oauth2Client,
@@ -562,43 +558,18 @@ function createSheet() {
             "Initial version"
         );
 
-        stage = "Tạo API Executable deployment";
-
-        const deployment = await createGoogleDeployment(
-            oauth2Client,
-            project.scriptId,
-            version.versionNumber
-        );
-
-        if (!deployment?.deploymentId) {
+        if (!version?.versionNumber) {
             throw new Error(
-                "Google không trả về deploymentId."
+                "Google không trả về versionNumber."
             );
         }
 
-        stage = "Kiểm tra deployment vừa tạo";
+        // Không tạo deployment tại đây.
+        // Project cần được liên kết Standard Cloud Project trước.
 
-        const deploymentInfo = await getGoogleDeployment(
-            oauth2Client,
-            project.scriptId,
-            deployment.deploymentId
+        const editorUrl = getGoogleScriptEditorUrl(
+            project.scriptId
         );
-
-        const entryPoints = Array.isArray(
-            deploymentInfo?.entryPoints
-        )
-            ? deploymentInfo.entryPoints
-            : [];
-
-        const hasExecutionApi = entryPoints.some(
-            item => item.entryPointType === "EXECUTION_API"
-        );
-
-        console.log("[CREATE PROJECT] DEPLOYMENT CHECK:", {
-            deploymentId: deployment.deploymentId,
-            entryPoints,
-            hasExecutionApi,
-        });
 
         stage = "Lưu project vào Supabase";
 
@@ -608,30 +579,49 @@ function createSheet() {
                 user_id: userId,
                 google_script_id: project.scriptId,
                 title,
-                deployment_id: deployment.deploymentId,
+
+                deployment_id: null,
                 version_number: version.versionNumber,
+
+                target_cloud_project_number:
+                    GOOGLE_CLOUD_PROJECT_NUMBER,
+
+                cloud_project_status: "PENDING_LINK",
+                cloud_project_linked_at: null,
+
+                editor_url: editorUrl,
             })
             .select()
             .single();
 
         if (error) throw error;
 
-        console.log("[CREATE PROJECT] Success:", {
+        console.log("[CREATE PROJECT] SUCCESS:", {
             projectId: data.id,
             scriptId: project.scriptId,
-            deploymentId: deployment.deploymentId,
             versionNumber: version.versionNumber,
-            hasExecutionApi,
+            cloudProjectNumber: GOOGLE_CLOUD_PROJECT_NUMBER,
+            cloudProjectStatus: "PENDING_LINK",
         });
 
         return res.status(201).json({
             success: true,
+            message:
+                "Đã tạo Apps Script project. Hãy liên kết Standard Cloud Project trước khi chạy code.",
             project: data,
-            deployment: {
-                deploymentId: deployment.deploymentId,
-                versionNumber: version.versionNumber,
-                entryPoints,
-                hasExecutionApi,
+            cloudProject: {
+                projectNumber: GOOGLE_CLOUD_PROJECT_NUMBER,
+                status: "PENDING_LINK",
+                editorUrl,
+                instructions: [
+                    "Mở Apps Script Editor.",
+                    "Chọn Project Settings.",
+                    "Tìm Google Cloud Platform (GCP) Project.",
+                    "Nhấn Change project.",
+                    `Nhập Project Number: ${GOOGLE_CLOUD_PROJECT_NUMBER}`,
+                    "Nhấn Set project.",
+                    "Quay lại IDE và xác nhận đã liên kết.",
+                ],
             },
         });
     } catch (error) {
@@ -647,7 +637,122 @@ function createSheet() {
 };
 
 // ============================================
-// 8. LƯU CODE VÀ CẬP NHẬT DEPLOYMENT
+// 8. XÁC NHẬN LIÊN KẾT CLOUD PROJECT
+// ============================================
+
+exports.confirmCloudProjectLink = async (req, res) => {
+    let stage = "Xác nhận Cloud Project";
+
+    try {
+        const userId = req.user?.id;
+        const projectId = req.params.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Vui lòng đăng nhập.",
+            });
+        }
+
+        stage = "Lấy project từ Supabase";
+
+        const {
+            data: project,
+            error,
+        } = await supabase
+            .from("script_projects")
+            .select("*")
+            .eq("id", projectId)
+            .eq("user_id", userId)
+            .single();
+
+        if (error || !project) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy project.",
+            });
+        }
+
+        if (!project.google_script_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Project chưa có Google Script ID.",
+            });
+        }
+
+        const expectedNumber = GOOGLE_CLOUD_PROJECT_NUMBER;
+
+        if (
+            project.target_cloud_project_number &&
+            project.target_cloud_project_number !== expectedNumber
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Cloud Project Number của project không khớp cấu hình hệ thống.",
+            });
+        }
+
+        // Lưu xác nhận của người dùng.
+        // Apps Script API không cung cấp phương thức công khai
+        // để controller tự xác minh Cloud Project association.
+
+        stage = "Cập nhật trạng thái trong Supabase";
+
+        const { data: updatedProject, error: updateError } =
+            await supabase
+                .from("script_projects")
+                .update({
+                    target_cloud_project_number: expectedNumber,
+                    cloud_project_status: "LINKED",
+                    cloud_project_linked_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                })
+                .eq("id", projectId)
+                .eq("user_id", userId)
+                .select()
+                .single();
+
+        if (updateError) throw updateError;
+
+        console.log("[CLOUD PROJECT] USER CONFIRMED:", {
+            projectId,
+            scriptId: project.google_script_id,
+            cloudProjectNumber: expectedNumber,
+        });
+
+        return res.json({
+            success: true,
+            message:
+                "Đã ghi nhận xác nhận liên kết Cloud Project. Bạn có thể lưu project để tạo deployment.",
+            project: updatedProject,
+            cloudProject: {
+                projectNumber: expectedNumber,
+                status: "LINKED",
+                editorUrl:
+                    project.editor_url ||
+                    getGoogleScriptEditorUrl(project.google_script_id),
+                manuallyConfirmed: true,
+            },
+        });
+    } catch (error) {
+        logGoogleError(
+            "Confirm Cloud Project Link",
+            error,
+            stage
+        );
+
+        return res.status(500).json({
+            success: false,
+            stage,
+            message: getErrorMessage(error),
+            googleError: getGoogleErrorDetails(error),
+        });
+    }
+};
+
+// ============================================
+// 9. LƯU CODE VÀ CẬP NHẬT DEPLOYMENT
 // ============================================
 
 exports.saveProject = async (req, res) => {
@@ -697,7 +802,7 @@ exports.saveProject = async (req, res) => {
         const { oauth2Client } =
             await getUserGoogleClient(userId);
 
-        stage = "3. Google projects.updateContent - Lưu source code";
+        stage = "3. Lưu source code";
 
         await saveGoogleProject(
             oauth2Client,
@@ -705,7 +810,7 @@ exports.saveProject = async (req, res) => {
             code
         );
 
-        stage = "4. Google projects.versions.create - Tạo version";
+        stage = "4. Tạo version";
 
         const version = await createGoogleVersion(
             oauth2Client,
@@ -719,12 +824,52 @@ exports.saveProject = async (req, res) => {
             );
         }
 
+        // Project chưa được người dùng xác nhận liên kết Cloud Project.
+        // Vẫn lưu source và version, nhưng không tạo deployment.
+
+        if (project.cloud_project_status !== "LINKED") {
+            const { error: updateError } = await supabase
+                .from("script_projects")
+                .update({
+                    version_number: version.versionNumber,
+                    target_cloud_project_number:
+                        GOOGLE_CLOUD_PROJECT_NUMBER,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq("id", projectId)
+                .eq("user_id", userId);
+
+            if (updateError) throw updateError;
+
+            return res.json({
+                success: true,
+                saved: true,
+                deployed: false,
+                message:
+                    "Đã lưu code. Project chưa được xác nhận liên kết Cloud Project nên chưa tạo deployment.",
+                projectId,
+                scriptId: project.google_script_id,
+                versionNumber: version.versionNumber,
+                cloudProject: {
+                    status: "PENDING_LINK",
+                    projectNumber: GOOGLE_CLOUD_PROJECT_NUMBER,
+                    editorUrl:
+                        project.editor_url ||
+                        getGoogleScriptEditorUrl(project.google_script_id),
+                },
+            });
+        }
+
+        // ========================================
+        // ĐÃ LIÊN KẾT: TIẾN HÀNH DEPLOYMENT
+        // ========================================
+
         let deployment = null;
         let deploymentId = null;
         let createdNewDeployment = false;
 
         if (project.deployment_id) {
-            stage = "5. Google deployments.get - Kiểm tra deployment cũ";
+            stage = "5. Kiểm tra deployment cũ";
 
             let oldDeployment = null;
 
@@ -764,14 +909,8 @@ exports.saveProject = async (req, res) => {
                     item => item.entryPointType === "EXECUTION_API"
                 );
 
-                console.log("[SAVE] OLD DEPLOYMENT CHECK:", {
-                    deploymentId: project.deployment_id,
-                    entryPoints: oldEntryPoints,
-                    oldHasExecutionApi,
-                });
-
                 if (oldHasExecutionApi) {
-                    stage = "5. Google deployments.update - Cập nhật deployment";
+                    stage = "5. Cập nhật deployment";
 
                     deployment = await updateGoogleDeployment(
                         oauth2Client,
@@ -784,7 +923,7 @@ exports.saveProject = async (req, res) => {
                         deployment?.deploymentId ||
                         project.deployment_id;
                 } else {
-                    stage = "5. Google deployments.create - Tạo deployment mới";
+                    stage = "5. Tạo deployment mới";
 
                     deployment = await createGoogleDeployment(
                         oauth2Client,
@@ -796,7 +935,7 @@ exports.saveProject = async (req, res) => {
                     deploymentId = deployment?.deploymentId;
                 }
             } else {
-                stage = "5. Google deployments.create - Thay thế deployment cũ";
+                stage = "5. Thay thế deployment cũ";
 
                 deployment = await createGoogleDeployment(
                     oauth2Client,
@@ -808,7 +947,7 @@ exports.saveProject = async (req, res) => {
                 deploymentId = deployment?.deploymentId;
             }
         } else {
-            stage = "5. Google deployments.create - Tạo deployment đầu tiên";
+            stage = "5. Tạo deployment đầu tiên";
 
             deployment = await createGoogleDeployment(
                 oauth2Client,
@@ -826,13 +965,13 @@ exports.saveProject = async (req, res) => {
             );
         }
 
-        console.log("[SAVE] DEPLOYMENT CREATED/UPDATED:", {
+        console.log("[SAVE] DEPLOYMENT:", {
             deploymentId,
             createdNewDeployment,
             versionNumber: version.versionNumber,
         });
 
-        stage = "6. Google deployments.get - Xác minh deployment";
+        stage = "6. Xác minh deployment";
 
         const verifiedDeployment = await getGoogleDeployment(
             oauth2Client,
@@ -853,19 +992,7 @@ exports.saveProject = async (req, res) => {
         const verifiedVersion =
             verifiedDeployment?.deploymentConfig?.versionNumber || null;
 
-        console.log("[SAVE] VERIFIED DEPLOYMENT:", JSON.stringify({
-            scriptId: project.google_script_id,
-            deploymentId,
-            versionNumber: version.versionNumber,
-            verifiedVersion,
-            createdNewDeployment,
-            entryPoints: verifiedEntryPoints,
-            hasExecutionApi,
-            deploymentConfig:
-                verifiedDeployment?.deploymentConfig || null,
-        }, null, 2));
-
-        stage = "7. Cập nhật deployment_id trong Supabase";
+        stage = "7. Cập nhật Supabase";
 
         const { error: updateError } = await supabase
             .from("script_projects")
@@ -882,15 +1009,17 @@ exports.saveProject = async (req, res) => {
         console.log("[SAVE PROJECT] SUCCESS:", {
             projectId,
             scriptId: project.google_script_id,
-            oldDeploymentId: project.deployment_id,
-            newDeploymentId: deploymentId,
+            deploymentId,
             versionNumber: version.versionNumber,
             createdNewDeployment,
             hasExecutionApi,
+            verifiedVersion,
         });
 
         return res.json({
             success: true,
+            saved: true,
+            deployed: true,
             message: hasExecutionApi
                 ? "Đã lưu code và xác minh API Executable deployment."
                 : "Đã lưu code và tạo deployment, nhưng Google chưa xác nhận EXECUTION_API.",
@@ -905,7 +1034,6 @@ exports.saveProject = async (req, res) => {
             deploymentConfig:
                 verifiedDeployment?.deploymentConfig || null,
         });
-
     } catch (error) {
         logGoogleError("Save project", error, stage);
 
@@ -919,7 +1047,7 @@ exports.saveProject = async (req, res) => {
 };
 
 // ============================================
-// 9. DANH SÁCH PROJECT
+// 10. DANH SÁCH PROJECT
 // ============================================
 
 exports.getProjects = async (req, res) => {
@@ -958,7 +1086,7 @@ exports.getProjects = async (req, res) => {
 };
 
 // ============================================
-// 10. NGẮT KẾT NỐI GOOGLE
+// 11. NGẮT KẾT NỐI GOOGLE
 // ============================================
 
 exports.disconnectGoogle = async (req, res) => {
@@ -994,7 +1122,7 @@ exports.disconnectGoogle = async (req, res) => {
 };
 
 // ============================================
-// 11. LẤY NỘI DUNG PROJECT
+// 12. LẤY NỘI DUNG PROJECT
 // ============================================
 
 exports.getProjectContent = async (req, res) => {
@@ -1036,7 +1164,7 @@ exports.getProjectContent = async (req, res) => {
         const { oauth2Client } =
             await getUserGoogleClient(userId);
 
-        stage = "Google projects.getContent - Đọc nội dung project";
+        stage = "Đọc nội dung project";
 
         const files = await getGoogleProjectContent(
             oauth2Client,
@@ -1060,7 +1188,7 @@ exports.getProjectContent = async (req, res) => {
 };
 
 // ============================================
-// 12. CHẠY GOOGLE APPS SCRIPT
+// 13. CHẠY GOOGLE APPS SCRIPT
 // ============================================
 
 exports.runProject = async (req, res) => {
@@ -1139,17 +1267,49 @@ exports.runProject = async (req, res) => {
             google_script_id: project.google_script_id,
             deployment_id: project.deployment_id,
             version_number: project.version_number,
-            updated_at: project.updated_at,
+            cloud_project_status: project.cloud_project_status,
         });
 
         if (!project.google_script_id) {
             throw new Error("Project chưa có google_script_id.");
         }
 
+        // Chặn chạy nếu chưa xác nhận liên kết.
+        if (project.cloud_project_status !== "LINKED") {
+            return res.status(403).json({
+                success: false,
+                requestId,
+                stage,
+                code: "CLOUD_PROJECT_NOT_LINKED",
+                message:
+                    "Project chưa được xác nhận liên kết Standard Cloud Project.",
+                cloudProject: {
+                    projectNumber: GOOGLE_CLOUD_PROJECT_NUMBER,
+                    status: project.cloud_project_status || "PENDING_LINK",
+                    editorUrl:
+                        project.editor_url ||
+                        getGoogleScriptEditorUrl(project.google_script_id),
+                    instructions: [
+                        "Mở Apps Script Editor.",
+                        "Chọn Project Settings.",
+                        "Tìm Google Cloud Platform (GCP) Project.",
+                        "Nhấn Change project.",
+                        `Nhập Project Number: ${GOOGLE_CLOUD_PROJECT_NUMBER}`,
+                        "Nhấn Set project.",
+                        "Quay lại IDE và xác nhận đã liên kết.",
+                    ],
+                },
+            });
+        }
+
         if (!project.deployment_id) {
-            throw new Error(
-                "Project chưa có deployment_id. Hãy lưu project trước khi chạy."
-            );
+            return res.status(400).json({
+                success: false,
+                requestId,
+                stage,
+                message:
+                    "Project chưa có deployment. Hãy lưu project để tạo deployment trước khi chạy.",
+            });
         }
 
         stage = "3. Lấy Google OAuth client";
@@ -1167,12 +1327,7 @@ exports.runProject = async (req, res) => {
 
         console.log("[3] GOOGLE SCOPES:", scopes);
 
-        stage = "4. Google deployments.get - Kiểm tra deployment";
-
-        console.log("[4] DEPLOYMENT REQUEST:", {
-            scriptId: project.google_script_id,
-            deploymentId: project.deployment_id,
-        });
+        stage = "4. Kiểm tra deployment";
 
         const deployment = await getGoogleDeployment(
             oauth2Client,
@@ -1207,12 +1362,6 @@ exports.runProject = async (req, res) => {
         const hasExecutionApi = entryPointTypes.includes(
             "EXECUTION_API"
         );
-
-        console.log("[5] ENTRY POINT CHECK:", JSON.stringify({
-            hasExecutionApi,
-            entryPointTypes,
-            entryPoints,
-        }, null, 2));
 
         if (!hasExecutionApi) {
             return res.status(400).json({
@@ -1266,12 +1415,12 @@ exports.runProject = async (req, res) => {
         });
 
         // QUAN TRỌNG:
-        // scripts.run cần DEPLOYMENT ID.
-        // Không truyền google_script_id ở đây.
+        // Google Apps Script API scripts.run nhận SCRIPT ID,
+        // KHÔNG nhận deployment ID.
 
         const result = await runGoogleScript(
             oauth2Client,
-            project.deployment_id,
+            project.google_script_id,
             functionName,
             parameters
         );
@@ -1331,7 +1480,7 @@ exports.runProject = async (req, res) => {
             functionName,
             returnValue,
             executionId: result?.executionId || null,
-            deploymentId: project.deployment_id,
+            scriptId: project.google_script_id,
             versionNumber: deployedVersion,
         });
 
@@ -1346,10 +1495,10 @@ exports.runProject = async (req, res) => {
             functionName,
             result: returnValue,
             executionId: result?.executionId || null,
+            scriptId: project.google_script_id,
             deploymentId: project.deployment_id,
             versionNumber: deployedVersion,
         });
-
     } catch (error) {
         console.error("\n");
         console.error("================================================");
