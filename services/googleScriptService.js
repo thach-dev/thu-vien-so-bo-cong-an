@@ -498,14 +498,55 @@ async function getGoogleDeployment(
     scriptId,
     deploymentId
 ) {
-    const script = getAppsScript(oauth2Client);
+    if (!oauth2Client) {
+        throw new Error("Thiếu OAuth2 Client.");
+    }
 
-    const response = await script.projects.deployments.get({
-        scriptId,
-        deploymentId,
-    });
+    if (!scriptId) {
+        throw new Error("Thiếu Google Script ID.");
+    }
 
-    return response.data;
+    if (!deploymentId) {
+        throw new Error("Thiếu Google Deployment ID.");
+    }
+
+    try {
+        const script = getAppsScript(oauth2Client);
+
+        const response = await script.projects.deployments.get({
+            scriptId: scriptId,
+            deploymentId: deploymentId,
+        });
+
+        const deployment = response.data;
+
+        console.log("[GOOGLE DEPLOYMENT CHECK]", {
+            scriptId,
+            deploymentId,
+            returnedDeploymentId: deployment.deploymentId,
+            versionNumber: deployment.deploymentConfig?.versionNumber,
+            entryPoints: deployment.entryPoints,
+        });
+
+        if (!deployment.deploymentId) {
+            throw new Error(
+                "Google không trả về Deployment ID hợp lệ."
+            );
+        }
+
+        return deployment;
+
+    } catch (error) {
+        console.error(
+            "[GOOGLE DEPLOYMENT CHECK ERROR]",
+            error.response?.data || error.message
+        );
+
+        throw createGoogleError(
+            error,
+            "Kiểm tra Google Deployment"
+        );
+    }
 }
 
 
@@ -520,11 +561,36 @@ async function runGoogleScript(
     functionName,
     parameters = []
 ) {
+    if (!oauth2Client) {
+        throw new Error("Thiếu OAuth2 Client.");
+    }
+
+    if (!deploymentId) {
+        throw new Error("Thiếu Deployment ID.");
+    }
+
+    if (!functionName || typeof functionName !== "string") {
+        throw new Error("Tên function không hợp lệ.");
+    }
+
+    if (!Array.isArray(parameters)) {
+        throw new Error("Parameters phải là một mảng.");
+    }
+
     const script = getAppsScript(oauth2Client);
+
+    console.log("[GOOGLE RUN REQUEST]", {
+        deploymentId,
+        functionName,
+        parameters,
+        devMode: false,
+    });
 
     try {
         const response = await script.scripts.run({
+            // Giá trị ở đây phải là DEPLOYMENT ID
             scriptId: deploymentId,
+
             requestBody: {
                 function: functionName.trim(),
                 parameters,
@@ -532,17 +598,27 @@ async function runGoogleScript(
             },
         });
 
+        console.log("[GOOGLE RUN RESPONSE]", {
+            deploymentId,
+            functionName,
+            response: response.data,
+        });
+
         return response.data;
+
     } catch (error) {
         console.error("[GOOGLE scripts.run ERROR]", {
             deploymentId,
             functionName,
-            message: error.message,
             status: error.response?.status,
+            message: error.message,
             response: error.response?.data,
         });
 
-        throw error;
+        throw createGoogleError(
+            error,
+            "Google scripts.run"
+        );
     }
 }
 
