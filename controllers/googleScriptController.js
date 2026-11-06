@@ -77,7 +77,7 @@ function redirectToFrontend(res, frontendOrigin, status) {
 }
 
 // ============================================
-// 2. CHUẨN HÓA LỖI
+// 2. XỬ LÝ LỖI
 // ============================================
 
 function getErrorMessage(error) {
@@ -147,6 +147,27 @@ function logGoogleError(label, error, stage = "") {
     console.error("Error Code:", error?.code || null);
     console.error("Stack:", error?.stack || null);
     console.error("======================================\n");
+}
+
+// Kiểm tra lỗi deployment không tồn tại.
+function isDeploymentNotFound(error) {
+    const status =
+        error?.response?.status ??
+        error?.response?.data?.error?.code ??
+        error?.code;
+
+    const googleStatus =
+        error?.response?.data?.error?.status;
+
+    const message = getErrorMessage(error).toLowerCase();
+
+    return (
+        Number(status) === 404 ||
+        status === "NOT_FOUND" ||
+        googleStatus === "NOT_FOUND" ||
+        message.includes("requested entity was not found") ||
+        message.includes("deployment not found")
+    );
 }
 
 // ============================================
@@ -319,10 +340,7 @@ exports.googleCallback = async (req, res) => {
 
         if (deleteError) throw deleteError;
 
-        if (
-            new Date(stateData.expires_at).getTime() <
-            Date.now()
-        ) {
+        if (new Date(stateData.expires_at).getTime() < Date.now()) {
             return redirectToFrontend(
                 res,
                 frontendOrigin,
@@ -646,7 +664,9 @@ exports.saveProject = async (req, res) => {
             });
         }
 
-        stage = "Lấy project từ Supabase";
+        // BƯỚC 1: LẤY PROJECT
+
+        stage = "1. Lấy project từ Supabase";
 
         const {
             data: project,
@@ -666,14 +686,16 @@ exports.saveProject = async (req, res) => {
             });
         }
 
-        stage = "Lấy Google OAuth client";
+        // BƯỚC 2: GOOGLE CLIENT
+
+        stage = "2. Lấy Google OAuth client";
 
         const { oauth2Client } =
             await getUserGoogleClient(userId);
 
-        // BƯỚC 1: LƯU CODE VÀ MANIFEST
+        // BƯỚC 3: LƯU CODE
 
-        stage = "1. Google projects.updateContent - Lưu source code";
+        stage = "3. Google projects.updateContent - Lưu source code";
 
         await saveGoogleProject(
             oauth2Client,
@@ -681,9 +703,9 @@ exports.saveProject = async (req, res) => {
             code
         );
 
-        // BƯỚC 2: TẠO VERSION MỚI
+        // BƯỚC 4: TẠO VERSION MỚI
 
-        stage = "2. Google projects.versions.create - Tạo version";
+        stage = "4. Google projects.versions.create - Tạo version";
 
         const version = await createGoogleVersion(
             oauth2Client,
@@ -691,55 +713,99 @@ exports.saveProject = async (req, res) => {
             `Saved at ${new Date().toISOString()}`
         );
 
-        // BƯỚC 3: KIỂM TRA DEPLOYMENT CŨ
+        if (!version?.versionNumber) {
+            throw new Error(
+                "Google không trả về versionNumber."
+            );
+        }
+
+        // BƯỚC 5: KIỂM TRA DEPLOYMENT CŨ
 
         let deployment = null;
+        let deploymentId = null;
         let createdNewDeployment = false;
         let oldEntryPoints = [];
 
         if (project.deployment_id) {
-            stage = "3. Google deployments.get - Kiểm tra deployment cũ";
+            stage = "5. Google deployments.get - Kiểm tra deployment cũ";
 
-            const oldDeployment = await getGoogleDeployment(
-                oauth2Client,
-                project.google_script_id,
-                project.deployment_id
-            );
+            let oldDeployment = null;
+            let oldDeploymentNotFound = false;
 
-            oldEntryPoints = Array.isArray(
-                oldDeployment?.entryPoints
-            )
-                ? oldDeployment.entryPoints
-                : [];
-
-            const oldHasExecutionApi = oldEntryPoints.some(
-                item => item.entryPointType === "EXECUTION_API"
-            );
-
-            console.log("[SAVE] OLD DEPLOYMENT:", JSON.stringify({
-                deploymentId: project.deployment_id,
-                deploymentConfig: oldDeployment?.deploymentConfig || null,
-                entryPoints: oldEntryPoints,
-                oldHasExecutionApi,
-            }, null, 2));
-
-            if (oldHasExecutionApi) {
-                // Deployment cũ đã có EXECUTION_API:
-                // Cập nhật version trên deployment hiện tại.
-
-                stage = "3. Google deployments.update - Cập nhật API deployment";
-
-                deployment = await updateGoogleDeployment(
+            try {
+                oldDeployment = await getGoogleDeployment(
                     oauth2Client,
                     project.google_script_id,
-                    project.deployment_id,
-                    version.versionNumber
+                    project.deployment_id
                 );
-            } else {
-                // Deployment cũ không có EXECUTION_API:
-                // Tạo deployment mới để tránh dùng deployment không phù hợp.
 
-                stage = "3. Google deployments.create - Tạo API deployment mới";
+                console.log(
+                    "[SAVE] OLD DEPLOYMENT:",
+                    JSON.stringify(oldDeployment, null, 2)
+                );
+            } catch (getError) {
+                if (isDeploymentNotFound(getError)) {
+                    oldDeploymentNotFound = true;
+
+                    console.warn(
+                        "[SAVE] Deployment cũ không tồn tại. Sẽ tạo deployment mới.",
+                        {
+                            oldDeploymentId: project.deployment_id,
+                            message: getErrorMessage(getError),
+                        }
+                    );
+                } else {
+                    throw getError;
+                }
+            }
+
+            if (oldDeployment && !oldDeploymentNotFound) {
+                oldEntryPoints = Array.isArray(
+                    oldDeployment.entryPoints
+                )
+                    ? oldDeployment.entryPoints
+                    : [];
+
+                const oldHasExecutionApi = oldEntryPoints.some(
+                    item => item.entryPointType === "EXECUTION_API"
+                );
+
+                console.log("[SAVE] OLD DEPLOYMENT CHECK:", {
+                    deploymentId: project.deployment_id,
+                    entryPoints: oldEntryPoints,
+                    oldHasExecutionApi,
+                });
+
+                if (oldHasExecutionApi) {
+                    stage = "5. Google deployments.update - Cập nhật deployment";
+
+                    deployment = await updateGoogleDeployment(
+                        oauth2Client,
+                        project.google_script_id,
+                        project.deployment_id,
+                        version.versionNumber
+                    );
+
+                    deploymentId =
+                        deployment?.deploymentId ||
+                        project.deployment_id;
+
+                } else {
+                    stage = "5. Google deployments.create - Tạo deployment mới";
+
+                    deployment = await createGoogleDeployment(
+                        oauth2Client,
+                        project.google_script_id,
+                        version.versionNumber
+                    );
+
+                    createdNewDeployment = true;
+                    deploymentId = deployment?.deploymentId;
+                }
+            } else {
+                // Deployment cũ bị xóa hoặc không còn tồn tại.
+
+                stage = "5. Google deployments.create - Thay thế deployment không tồn tại";
 
                 deployment = await createGoogleDeployment(
                     oauth2Client,
@@ -748,9 +814,12 @@ exports.saveProject = async (req, res) => {
                 );
 
                 createdNewDeployment = true;
+                deploymentId = deployment?.deploymentId;
             }
         } else {
-            stage = "3. Google deployments.create - Tạo API deployment";
+            // Project chưa có deployment_id.
+
+            stage = "5. Google deployments.create - Tạo deployment đầu tiên";
 
             deployment = await createGoogleDeployment(
                 oauth2Client,
@@ -759,21 +828,24 @@ exports.saveProject = async (req, res) => {
             );
 
             createdNewDeployment = true;
+            deploymentId = deployment?.deploymentId;
         }
-
-        const deploymentId =
-            deployment?.deploymentId ||
-            project.deployment_id;
 
         if (!deploymentId) {
             throw new Error(
-                "Không lấy được deploymentId sau khi lưu."
+                "Google không trả về deploymentId sau khi tạo hoặc cập nhật deployment."
             );
         }
 
-        // BƯỚC 4: ĐỌC LẠI DEPLOYMENT ĐỂ KIỂM TRA
+        console.log("[SAVE] DEPLOYMENT CREATED/UPDATED:", {
+            deploymentId,
+            createdNewDeployment,
+            versionNumber: version.versionNumber,
+        });
 
-        stage = "4. Google deployments.get - Xác minh deployment mới";
+        // BƯỚC 6: ĐỌC LẠI DEPLOYMENT ĐỂ XÁC MINH
+
+        stage = "6. Google deployments.get - Xác minh deployment";
 
         const verifiedDeployment = await getGoogleDeployment(
             oauth2Client,
@@ -791,9 +863,14 @@ exports.saveProject = async (req, res) => {
             item => item.entryPointType === "EXECUTION_API"
         );
 
-        console.log("[SAVE] DEPLOYMENT RESULT:", JSON.stringify({
+        const verifiedVersion =
+            verifiedDeployment?.deploymentConfig?.versionNumber || null;
+
+        console.log("[SAVE] VERIFIED DEPLOYMENT:", JSON.stringify({
+            scriptId: project.google_script_id,
             deploymentId,
             versionNumber: version.versionNumber,
+            verifiedVersion,
             createdNewDeployment,
             entryPoints: verifiedEntryPoints,
             hasExecutionApi,
@@ -801,9 +878,9 @@ exports.saveProject = async (req, res) => {
                 verifiedDeployment?.deploymentConfig || null,
         }, null, 2));
 
-        // BƯỚC 5: CẬP NHẬT SUPABASE
+        // BƯỚC 7: LƯU DEPLOYMENT MỚI VÀO SUPABASE
 
-        stage = "5. Cập nhật thông tin project trong Supabase";
+        stage = "7. Cập nhật deployment_id trong Supabase";
 
         const { error: updateError } = await supabase
             .from("script_projects")
@@ -817,10 +894,11 @@ exports.saveProject = async (req, res) => {
 
         if (updateError) throw updateError;
 
-        console.log("[SAVE PROJECT] Success:", {
+        console.log("[SAVE PROJECT] SUCCESS:", {
             projectId,
             scriptId: project.google_script_id,
-            deploymentId,
+            oldDeploymentId: project.deployment_id,
+            newDeploymentId: deploymentId,
             versionNumber: version.versionNumber,
             createdNewDeployment,
             hasExecutionApi,
@@ -830,13 +908,19 @@ exports.saveProject = async (req, res) => {
             success: true,
             message: hasExecutionApi
                 ? "Đã lưu code và xác minh API Executable deployment."
-                : "Đã lưu code, nhưng Google chưa xác nhận EXECUTION_API trong deployment.",
+                : "Đã lưu code và tạo deployment, nhưng Google chưa xác nhận EXECUTION_API.",
+            projectId,
+            scriptId: project.google_script_id,
+            oldDeploymentId: project.deployment_id,
             deploymentId,
             versionNumber: version.versionNumber,
             createdNewDeployment,
             hasExecutionApi,
             entryPoints: verifiedEntryPoints,
+            deploymentConfig:
+                verifiedDeployment?.deploymentConfig || null,
         });
+
     } catch (error) {
         logGoogleError("Save project", error, stage);
 
@@ -1042,7 +1126,7 @@ exports.runProject = async (req, res) => {
             });
         }
 
-        // BƯỚC 2: LẤY PROJECT TỪ SUPABASE
+        // BƯỚC 2: LẤY PROJECT
 
         stage = "2. Lấy project từ Supabase";
 
@@ -1089,7 +1173,7 @@ exports.runProject = async (req, res) => {
             );
         }
 
-        // BƯỚC 3: LẤY GOOGLE OAUTH CLIENT
+        // BƯỚC 3: GOOGLE CLIENT
 
         stage = "3. Lấy Google OAuth client";
 
@@ -1157,16 +1241,13 @@ exports.runProject = async (req, res) => {
             entryPoints,
         }, null, 2));
 
-        if (
-            entryPoints.length > 0 &&
-            !hasExecutionApi
-        ) {
+        if (!hasExecutionApi) {
             return res.status(400).json({
                 success: false,
                 requestId,
                 stage,
                 message:
-                    "Deployment hiện tại không có EXECUTION_API entry point. Hãy lưu project để tạo deployment phù hợp.",
+                    "Deployment chưa có EXECUTION_API entry point. Hãy lưu project để tạo hoặc cập nhật deployment.",
                 deployment: {
                     deploymentId: project.deployment_id,
                     deploymentConfig,
@@ -1175,7 +1256,7 @@ exports.runProject = async (req, res) => {
             });
         }
 
-        // BƯỚC 6: SO SÁNH VERSION
+        // BƯỚC 6: KIỂM TRA VERSION
 
         stage = "6. Kiểm tra version deployment";
 
@@ -1203,7 +1284,7 @@ exports.runProject = async (req, res) => {
             );
         }
 
-        // BƯỚC 7: GỌI GOOGLE SCRIPTS.RUN
+        // BƯỚC 7: CHẠY GOOGLE SCRIPT
 
         stage = "7. Google scripts.run - Thực thi function";
 
@@ -1217,7 +1298,7 @@ exports.runProject = async (req, res) => {
 
         const result = await runGoogleScript(
             oauth2Client,
-            project.deployment_id,
+            project.google_script_id,
             functionName,
             parameters
         );
@@ -1227,7 +1308,7 @@ exports.runProject = async (req, res) => {
             JSON.stringify(result, null, 2)
         );
 
-        // BƯỚC 8: KIỂM TRA LỖI EXECUTION
+        // BƯỚC 8: KIỂM TRA LỖI
 
         stage = "8. Kiểm tra kết quả thực thi";
 
@@ -1266,7 +1347,7 @@ exports.runProject = async (req, res) => {
             });
         }
 
-        // BƯỚC 9: LẤY KẾT QUẢ FUNCTION
+        // BƯỚC 9: TRẢ KẾT QUẢ
 
         stage = "9. Trả kết quả thực thi";
 
