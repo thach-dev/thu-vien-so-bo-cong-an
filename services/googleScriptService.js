@@ -1,3 +1,4 @@
+
 const { google } = require("googleapis");
 
 // ============================================
@@ -384,14 +385,13 @@ async function createGoogleDeployment(
     try {
         const script = getAppsScript(oauth2Client);
 
-        // QUAN TRỌNG:
-        // requestBody chính là DeploymentConfig.
-        // Không bọc bên trong deploymentConfig.
+        // CREATE:
+        // requestBody là DeploymentConfig trực tiếp.
+        // Không bọc trong deploymentConfig.
 
         const response = await script.projects.deployments.create({
             scriptId,
             requestBody: {
-                scriptId,
                 versionNumber: Number(versionNumber),
                 description,
             },
@@ -458,16 +458,18 @@ async function updateGoogleDeployment(
     try {
         const script = getAppsScript(oauth2Client);
 
-        // QUAN TRỌNG:
-        // DeploymentConfig được truyền trực tiếp.
+        // UPDATE:
+        // Google yêu cầu cấu hình nằm trong deploymentConfig.
 
         const response = await script.projects.deployments.update({
             scriptId,
             deploymentId,
             requestBody: {
-                scriptId,
-                versionNumber: Number(versionNumber),
-                description,
+                deploymentConfig: {
+                    scriptId,
+                    versionNumber: Number(versionNumber),
+                    description,
+                },
             },
         });
 
@@ -476,6 +478,8 @@ async function updateGoogleDeployment(
             deploymentId,
             versionNumber,
             returnedDeploymentId: response.data?.deploymentId,
+            deploymentConfig: response.data?.deploymentConfig,
+            entryPoints: response.data?.entryPoints,
         });
 
         return response.data;
@@ -560,7 +564,7 @@ async function getGoogleDeployment(
 
 async function runGoogleScript(
     oauth2Client,
-    scriptId,
+    deploymentId,
     functionName,
     parameters = []
 ) {
@@ -568,8 +572,8 @@ async function runGoogleScript(
         throw new Error("Thiếu OAuth2 Client.");
     }
 
-    if (!scriptId) {
-        throw new Error("Thiếu Google Apps Script Project ID.");
+    if (!deploymentId) {
+        throw new Error("Thiếu Google Deployment ID.");
     }
 
     if (!functionName || typeof functionName !== "string") {
@@ -584,15 +588,18 @@ async function runGoogleScript(
         const script = getAppsScript(oauth2Client);
 
         console.log("[GOOGLE RUN REQUEST]", {
-            scriptId,
+            deploymentId,
             functionName,
             parameters,
             devMode: false,
         });
 
         const response = await script.scripts.run({
-            // scripts.run sử dụng SCRIPT ID của project.
-            scriptId,
+            // API scripts.run yêu cầu Deployment ID.
+            // googleapis đặt tên tham số là scriptId,
+            // nhưng giá trị truyền vào phải là deploymentId.
+
+            scriptId: deploymentId,
 
             requestBody: {
                 function: functionName.trim(),
@@ -602,7 +609,7 @@ async function runGoogleScript(
         });
 
         console.log("[GOOGLE RUN RESPONSE]", {
-            scriptId,
+            deploymentId,
             functionName,
             response: response.data,
         });
@@ -618,7 +625,7 @@ async function runGoogleScript(
 
     } catch (error) {
         console.error("[GOOGLE scripts.run ERROR]", {
-            scriptId,
+            deploymentId,
             functionName,
             status: error.response?.status,
             message: error.message,
