@@ -1,4 +1,3 @@
-
 const { google } = require("googleapis");
 
 // ============================================
@@ -10,16 +9,13 @@ const SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 
-    // Apps Script
     "https://www.googleapis.com/auth/script.projects",
     "https://www.googleapis.com/auth/script.deployments",
     "https://www.googleapis.com/auth/script.scriptapp",
 
-    // Google Drive
     "https://www.googleapis.com/auth/drive",
 ];
 
-// Các scope cần có để quản lý và thực thi Apps Script
 const REQUIRED_SCOPES = [
     "https://www.googleapis.com/auth/script.projects",
     "https://www.googleapis.com/auth/script.deployments",
@@ -66,6 +62,7 @@ function createGoogleError(error, stage) {
     newError.stage = stage;
     newError.status = error?.response?.status || null;
     newError.code = error?.code || null;
+
     newError.googleError =
         googleResponse?.error || googleResponse || null;
 
@@ -156,6 +153,7 @@ async function exchangeCode(code) {
             oauth2Client,
             tokens,
         };
+
     } catch (error) {
         throw createGoogleError(
             error,
@@ -183,6 +181,7 @@ async function getGoogleUser(oauth2Client) {
             name: data.name,
             picture: data.picture,
         };
+
     } catch (error) {
         throw createGoogleError(
             error,
@@ -223,6 +222,7 @@ async function createGoogleProject(oauth2Client, title) {
         }
 
         return response.data;
+
     } catch (error) {
         throw createGoogleError(
             error,
@@ -232,7 +232,7 @@ async function createGoogleProject(oauth2Client, title) {
 }
 
 // ============================================
-// LƯU SOURCE CODE
+// LƯU SOURCE CODE VÀ MANIFEST
 // ============================================
 
 async function saveGoogleProject(
@@ -267,9 +267,9 @@ async function saveGoogleProject(
                     exceptionLogging: "STACKDRIVER",
                     runtimeVersion: "V8",
                     executionApi: {
-                        access: "MYSELF"
-                    }
-                }, null, 2)
+                        access: "MYSELF",
+                    },
+                }, null, 2),
             },
             ...additionalFiles,
         ];
@@ -282,6 +282,7 @@ async function saveGoogleProject(
         });
 
         return response.data;
+
     } catch (error) {
         throw createGoogleError(
             error,
@@ -310,6 +311,7 @@ async function getGoogleProjectContent(
         });
 
         return response.data.files || [];
+
     } catch (error) {
         throw createGoogleError(
             error,
@@ -348,27 +350,13 @@ async function createGoogleVersion(
         }
 
         return response.data;
+
     } catch (error) {
         throw createGoogleError(
             error,
             "Google projects.versions.create"
         );
     }
-}
-
-// ============================================
-// CẤU HÌNH API EXECUTABLE
-// ============================================
-
-function createExecutionApiEntryPoint() {
-    return {
-        entryPointType: "EXECUTION_API",
-        executionApi: {
-            entryPointConfig: {
-                access: "MYSELF",
-            },
-        },
-    };
 }
 
 // ============================================
@@ -396,14 +384,16 @@ async function createGoogleDeployment(
     try {
         const script = getAppsScript(oauth2Client);
 
+        // QUAN TRỌNG:
+        // requestBody chính là DeploymentConfig.
+        // Không bọc bên trong deploymentConfig.
+
         const response = await script.projects.deployments.create({
             scriptId,
             requestBody: {
-                deploymentConfig: {
-                    scriptId,
-                    versionNumber: Number(versionNumber),
-                    description,
-                },
+                scriptId,
+                versionNumber: Number(versionNumber),
+                description,
             },
         });
 
@@ -411,7 +401,7 @@ async function createGoogleDeployment(
 
         if (!deployment?.deploymentId) {
             throw new Error(
-                "Google tạo deployment nhưng không trả về deploymentId."
+                "Google không trả về Deployment ID."
             );
         }
 
@@ -439,7 +429,7 @@ async function createGoogleDeployment(
 }
 
 // ============================================
-// CẬP NHẬT API EXECUTABLE DEPLOYMENT
+// CẬP NHẬT DEPLOYMENT
 // ============================================
 
 async function updateGoogleDeployment(
@@ -465,42 +455,47 @@ async function updateGoogleDeployment(
         throw new Error("Version number không hợp lệ.");
     }
 
-    const script = getAppsScript(oauth2Client);
-
     try {
+        const script = getAppsScript(oauth2Client);
+
+        // QUAN TRỌNG:
+        // DeploymentConfig được truyền trực tiếp.
+
         const response = await script.projects.deployments.update({
             scriptId,
             deploymentId,
             requestBody: {
-                deploymentConfig: {
-                    scriptId,
-                    versionNumber: Number(versionNumber),
-                    description,
-                },
+                scriptId,
+                versionNumber: Number(versionNumber),
+                description,
             },
         });
 
-        console.log("UPDATED GOOGLE DEPLOYMENT:", {
+        console.log("[UPDATE DEPLOYMENT SUCCESS]", {
             scriptId,
             deploymentId,
             versionNumber,
+            returnedDeploymentId: response.data?.deploymentId,
         });
 
         return response.data;
+
     } catch (error) {
         console.error(
-            "UPDATE GOOGLE DEPLOYMENT ERROR:",
+            "[UPDATE DEPLOYMENT ERROR]",
             error.response?.data || error.message
         );
 
-        throw error;
+        throw createGoogleError(
+            error,
+            "Google projects.deployments.update"
+        );
     }
 }
 
 // ============================================
 // LẤY THÔNG TIN DEPLOYMENT
 // ============================================
-
 
 async function getGoogleDeployment(
     oauth2Client,
@@ -523,8 +518,8 @@ async function getGoogleDeployment(
         const script = getAppsScript(oauth2Client);
 
         const response = await script.projects.deployments.get({
-            scriptId: scriptId,
-            deploymentId: deploymentId,
+            scriptId,
+            deploymentId,
         });
 
         const deployment = response.data;
@@ -533,7 +528,8 @@ async function getGoogleDeployment(
             scriptId,
             deploymentId,
             returnedDeploymentId: deployment.deploymentId,
-            versionNumber: deployment.deploymentConfig?.versionNumber,
+            versionNumber:
+                deployment.deploymentConfig?.versionNumber,
             entryPoints: deployment.entryPoints,
         });
 
@@ -553,16 +549,14 @@ async function getGoogleDeployment(
 
         throw createGoogleError(
             error,
-            "Kiểm tra Google Deployment"
+            "Google projects.deployments.get"
         );
     }
 }
 
-
 // ============================================
 // CHẠY GOOGLE APPS SCRIPT
 // ============================================
-
 
 async function runGoogleScript(
     oauth2Client,
@@ -586,17 +580,18 @@ async function runGoogleScript(
         throw new Error("Parameters phải là một mảng.");
     }
 
-    const script = getAppsScript(oauth2Client);
-
-    console.log("[GOOGLE RUN REQUEST]", {
-        scriptId,
-        functionName,
-        parameters,
-        devMode: false,
-    });
-
     try {
+        const script = getAppsScript(oauth2Client);
+
+        console.log("[GOOGLE RUN REQUEST]", {
+            scriptId,
+            functionName,
+            parameters,
+            devMode: false,
+        });
+
         const response = await script.scripts.run({
+            // scripts.run sử dụng SCRIPT ID của project.
             scriptId,
 
             requestBody: {
@@ -636,7 +631,6 @@ async function runGoogleScript(
         );
     }
 }
-
 
 // ============================================
 // EXPORT
