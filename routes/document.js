@@ -89,6 +89,15 @@ router.get(
   "/categories",
   documentController.getDocumentCategories
 );
+
+// -----------------------------------------------------
+// SUBMIT BOOK BY LINK
+// -----------------------------------------------------
+
+router.post(
+  "/link",
+  documentController.submitBookByLink
+);
 // =====================================================
 // EXPORT
 // =====================================================

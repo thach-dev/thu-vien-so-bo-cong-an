@@ -665,6 +665,178 @@ const uploadDocument = async (req, res) => {
   }
 };
 
+
+// =====================================================
+// 1.1. ĐĂNG SÁCH BẰNG LINK
+// =====================================================
+
+const submitBookByLink = async (req, res) => {
+  try {
+    const {
+      uploader_id,
+      title,
+      description,
+      category,
+      original_author,
+      source_citation,
+      cover_image_url,
+      reading_url,
+      license_confirmed,
+    } = req.body;
+
+    console.log("=================================");
+    console.log("SUBMIT BOOK BY LINK");
+    console.log("Uploader:", uploader_id);
+    console.log("Title:", title);
+    console.log("Reading URL:", reading_url);
+    console.log("=================================");
+
+    // 1. Kiểm tra dữ liệu bắt buộc
+    if (!uploader_id || !title || !reading_url) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp người đăng, tên sách và đường dẫn đọc sách.",
+      });
+    }
+
+    // 2. Kiểm tra cam kết bản quyền
+    const isLicenseConfirmed =
+      license_confirmed === true ||
+      license_confirmed === "true";
+
+    if (!isLicenseConfirmed) {
+      return res.status(400).json({
+        message:
+          "Bạn phải đồng ý cam kết tuân thủ quyền sở hữu trí tuệ.",
+      });
+    }
+
+    // 3. Kiểm tra URL hợp lệ, chỉ chấp nhận HTTP/HTTPS
+    const isValidHttpUrl = (value) => {
+      try {
+        const parsedUrl = new URL(value);
+
+        return (
+          parsedUrl.protocol === "http:" ||
+          parsedUrl.protocol === "https:"
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    if (!isValidHttpUrl(reading_url)) {
+      return res.status(400).json({
+        message: "Đường dẫn đọc sách không hợp lệ.",
+      });
+    }
+
+    // Ảnh bìa không bắt buộc, nhưng nếu có phải là URL hợp lệ
+    if (
+      cover_image_url &&
+      !isValidHttpUrl(cover_image_url)
+    ) {
+      return res.status(400).json({
+        message: "Đường dẫn ảnh bìa không hợp lệ.",
+      });
+    }
+
+    // 4. Kiểm tra người đăng tồn tại
+    const {
+      data: uploader,
+      error: uploaderError,
+    } = await supabase
+      .from("users")
+      .select("id, username, role")
+      .eq("id", uploader_id)
+      .maybeSingle();
+
+    if (uploaderError) {
+      console.error("Check uploader error:", uploaderError);
+
+      return res.status(500).json({
+        message: "Không thể kiểm tra người đăng sách.",
+        error: uploaderError.message,
+      });
+    }
+
+    if (!uploader) {
+      return res.status(400).json({
+        message: "Tài khoản đăng sách không tồn tại.",
+      });
+    }
+
+    // 5. Lưu thông tin sách vào Supabase
+    // Không upload file lên Storage
+    const {
+      data: newDoc,
+      error: dbError,
+    } = await supabase
+      .from("documents")
+      .insert({
+        uploader_id: uploader.id,
+
+        title: String(title).trim(),
+
+        description: description
+          ? String(description).trim()
+          : null,
+
+        category: category || "REFERENCE_BOOK",
+
+        // Với sách dạng link, lưu URL đọc sách tại file_path
+        file_path: String(reading_url).trim(),
+
+        original_author: original_author
+          ? String(original_author).trim()
+          : null,
+
+        source_citation: source_citation
+          ? String(source_citation).trim()
+          : null,
+
+        cover_image_url: cover_image_url
+          ? String(cover_image_url).trim()
+          : null,
+
+        source_type: "LINK",
+
+        license_confirmed: true,
+
+        // Bắt buộc chờ quản trị viên duyệt
+        status: "PENDING",
+      })
+      .select("*")
+      .single();
+
+    if (dbError) {
+      console.error("Insert book by link error:", dbError);
+
+      return res.status(500).json({
+        message: "Không thể lưu sách vào cơ sở dữ liệu.",
+        error: dbError.message,
+        code: dbError.code,
+        details: dbError.details,
+      });
+    }
+
+    console.log("SUBMIT BOOK BY LINK SUCCESS:", newDoc.id);
+
+    return res.status(201).json({
+      message: "Đăng sách thành công, đang chờ quản trị viên kiểm duyệt.",
+      document: newDoc,
+    });
+
+  } catch (error) {
+    console.error("Submit book by link server error:", error);
+
+    return res.status(500).json({
+      message: "Server Error",
+      error: error.message,
+    });
+  }
+};
+
+
 // =====================================================
 // 2. LẤY TÀI LIỆU ĐÃ DUYỆT
 // =====================================================
@@ -1192,6 +1364,7 @@ const getDocumentCategories =
 
 module.exports = {
   uploadDocument,
+  submitBookByLink,
   getApprovedDocuments,
   searchDocuments,
   getDocumentCategories,
