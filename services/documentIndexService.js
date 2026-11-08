@@ -16,11 +16,98 @@ const {
 
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 180;
+
 const EMBEDDING_BATCH_SIZE = 5;
+
 const MAX_SEARCH_RESULTS = 30;
 
+// Số lần thử lại khi Gemini gặp lỗi.
+const MAX_EMBEDDING_RETRIES = 6;
+
+// Nghỉ giữa các nhóm embedding.
+const BATCH_DELAY = 1000;
+
 // =====================================================
-// 1. CHIA NỘI DUNG THÀNH CÁC ĐOẠN NHỎ
+// HÀM TIỆN ÍCH
+// =====================================================
+
+const sleep = (ms) => {
+    return new Promise((resolve) =>
+        setTimeout(resolve, ms)
+    );
+};
+
+// =====================================================
+// 1. NHẬN DIỆN LỖI QUOTA GEMINI
+// =====================================================
+
+const getGeminiRetryDelay = (error, attempt) => {
+    const message = String(
+        error?.message || ""
+    );
+
+    // Đọc retryDelay từ JSON của Gemini.
+    const retryDelayMatch = message.match(
+        /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/
+    );
+
+    if (retryDelayMatch) {
+        return (
+            Math.ceil(
+                Number(retryDelayMatch[1]) * 1000
+            ) + 2000
+        );
+    }
+
+    // Một số lỗi trả về dạng:
+    // Please retry in 10.5s
+    const retryMatch = message.match(
+        /retry in\s+(\d+(?:\.\d+)?)s/i
+    );
+
+    if (retryMatch) {
+        return (
+            Math.ceil(
+                Number(retryMatch[1]) * 1000
+            ) + 2000
+        );
+    }
+
+    // Nếu không có thời gian cụ thể,
+    // sử dụng exponential backoff.
+    return Math.min(
+        5000 * Math.pow(2, attempt - 1),
+        60000
+    );
+};
+
+const isRetryableGeminiError = (error) => {
+    const message = String(
+        error?.message || ""
+    ).toLowerCase();
+
+    const status = Number(
+        error?.status ||
+        error?.code ||
+        0
+    );
+
+    return (
+        status === 429 ||
+        status === 500 ||
+        status === 503 ||
+        status === 504 ||
+        message.includes("429") ||
+        message.includes("quota") ||
+        message.includes("resource_exhausted") ||
+        message.includes("rate limit") ||
+        message.includes("503") ||
+        message.includes("504")
+    );
+};
+
+// =====================================================
+// 2. CHIA NỘI DUNG THÀNH CÁC ĐOẠN
 // =====================================================
 
 const splitTextIntoChunks = (text) => {
@@ -35,6 +122,7 @@ const splitTextIntoChunks = (text) => {
         .trim();
 
     const chunks = [];
+
     let start = 0;
 
     while (start < cleanText.length) {
@@ -43,7 +131,6 @@ const splitTextIntoChunks = (text) => {
             cleanText.length
         );
 
-        // Ưu tiên cắt tại cuối đoạn hoặc cuối câu.
         if (end < cleanText.length) {
             const searchStart =
                 start + Math.floor(CHUNK_SIZE * 0.7);
@@ -72,7 +159,10 @@ const splitTextIntoChunks = (text) => {
             );
 
             if (breakPosition >= 0) {
-                end = searchStart + breakPosition + 1;
+                end =
+                    searchStart +
+                    breakPosition +
+                    1;
             }
         }
 
@@ -98,7 +188,7 @@ const splitTextIntoChunks = (text) => {
 };
 
 // =====================================================
-// 2. TẠO EMBEDDING CÓ THỬ LẠI
+// 3. TẠO EMBEDDING CÓ TỰ ĐỘNG THỬ LẠI
 // =====================================================
 
 const createEmbeddingWithRetry = async (
@@ -107,25 +197,56 @@ const createEmbeddingWithRetry = async (
 ) => {
     let lastError;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (
+        let attempt = 1;
+        attempt <= MAX_EMBEDDING_RETRIES;
+        attempt++
+    ) {
         try {
-            return await generateDocumentEmbedding(
-                content,
-                title
-            );
+            const embedding =
+                await generateDocumentEmbedding(
+                    content,
+                    title
+                );
+
+            if (
+                !Array.isArray(embedding) ||
+                embedding.length !== 768
+            ) {
+                throw new Error(
+                    "Embedding phải có đúng 768 chiều."
+                );
+            }
+
+            return embedding;
+
         } catch (error) {
             lastError = error;
 
             console.error(
-                `Embedding lỗi lần ${attempt}/3:`,
+                `Embedding lỗi lần ${attempt}/${MAX_EMBEDDING_RETRIES}:`,
                 error.message
             );
 
-            if (attempt < 3) {
-                await new Promise((resolve) =>
-                    setTimeout(resolve, attempt * 2000)
-                );
+            // Không thử lại nếu lỗi không thể khắc phục
+            // bằng cách chờ.
+            if (
+                !isRetryableGeminiError(error) ||
+                attempt === MAX_EMBEDDING_RETRIES
+            ) {
+                throw error;
             }
+
+            const delay = getGeminiRetryDelay(
+                error,
+                attempt
+            );
+
+            console.log(
+                `Gemini đang giới hạn quota. Tự động chờ ${Math.ceil(delay / 1000)} giây...`
+            );
+
+            await sleep(delay);
         }
     }
 
@@ -133,21 +254,73 @@ const createEmbeddingWithRetry = async (
 };
 
 // =====================================================
-// 3. LẬP CHỈ MỤC MỘT TÀI LIỆU ĐÃ DUYỆT
+// 4. LẤY CÁC ĐOẠN ĐÃ LẬP CHỈ MỤC
 // =====================================================
 
-const indexApprovedDocument = async (documentId) => {
+const getExistingChunks = async (documentId) => {
+    const {
+        data,
+        error,
+    } = await supabase
+        .from("document_chunks")
+        .select(
+            "chunk_index, content, embedding"
+        )
+        .eq("document_id", documentId);
+
+    if (error) {
+        throw new Error(
+            `Không thể kiểm tra chỉ mục cũ: ${error.message}`
+        );
+    }
+
+    return data || [];
+};
+
+// =====================================================
+// 5. LƯU TỪNG ĐOẠN VÀO SUPABASE
+// =====================================================
+
+const saveDocumentChunk = async (chunkData) => {
+    const {
+        error,
+    } = await supabase
+        .from("document_chunks")
+        .upsert(
+            chunkData,
+            {
+                onConflict:
+                    "document_id,chunk_index",
+            }
+        );
+
+    if (error) {
+        throw new Error(
+            `Không thể lưu đoạn ${chunkData.chunk_index}: ${error.message}`
+        );
+    }
+};
+
+// =====================================================
+// 6. LẬP CHỈ MỤC MỘT TÀI LIỆU
+// =====================================================
+
+const indexApprovedDocument = async (
+    documentId
+) => {
     if (!documentId) {
         throw new Error("Thiếu documentId.");
     }
 
-    // Chỉ lấy tài liệu APPROVED.
+    // Chỉ xử lý tài liệu đã duyệt.
     const {
         data: document,
         error: documentError,
     } = await supabase
         .from("documents")
-        .select("id, title, file_path, source_type, status")
+        .select(
+            "id, title, file_path, source_type, status"
+        )
         .eq("id", documentId)
         .eq("status", "APPROVED")
         .single();
@@ -158,14 +331,14 @@ const indexApprovedDocument = async (documentId) => {
         );
     }
 
-    // Chưa xử lý tài liệu dạng LINK.
+    // Chưa hỗ trợ tài liệu LINK.
     if (document.source_type === "LINK") {
         return {
             success: false,
             skipped: true,
             documentId,
             reason:
-                "Tài liệu dạng LINK cần bộ đọc URL an toàn riêng.",
+                "Tài liệu LINK chưa được hỗ trợ lập chỉ mục.",
         };
     }
 
@@ -180,10 +353,11 @@ const indexApprovedDocument = async (documentId) => {
         document.title
     );
 
-    // Đọc nội dung tài liệu.
-    const documentText = await extractDocumentText(
-        document.file_path
-    );
+    // Đọc file.
+    const documentText =
+        await extractDocumentText(
+            document.file_path
+        );
 
     if (
         !documentText ||
@@ -194,10 +368,9 @@ const indexApprovedDocument = async (documentId) => {
         );
     }
 
-    // Chia nội dung thành các đoạn.
-    const chunks = splitTextIntoChunks(
-        documentText
-    );
+    // Chia đoạn.
+    const chunks =
+        splitTextIntoChunks(documentText);
 
     if (!chunks.length) {
         throw new Error(
@@ -206,12 +379,26 @@ const indexApprovedDocument = async (documentId) => {
     }
 
     console.log(
-        `Tài liệu ${document.title}: ${chunks.length} đoạn.`
+        `Tổng số đoạn cần xử lý: ${chunks.length}`
     );
 
-    // Tạo embedding trước khi xóa dữ liệu cũ.
-    const indexedChunks = [];
+    // Lấy dữ liệu đã lập chỉ mục trước đó.
+    const existingChunks =
+        await getExistingChunks(document.id);
 
+    const existingMap = new Map();
+
+    for (const item of existingChunks) {
+        existingMap.set(
+            item.chunk_index,
+            item
+        );
+    }
+
+    let reusedChunks = 0;
+    let generatedChunks = 0;
+
+    // Xử lý từng nhóm.
     for (
         let batchStart = 0;
         batchStart < chunks.length;
@@ -222,98 +409,100 @@ const indexApprovedDocument = async (documentId) => {
             batchStart + EMBEDDING_BATCH_SIZE
         );
 
+        console.log(
+            `Đang xử lý đoạn ${batchStart + 1} đến ${batchStart + batch.length}/${chunks.length}`
+        );
+
         for (let i = 0; i < batch.length; i++) {
             const chunkIndex = batchStart + i;
+
             const content = batch[i];
 
+            const existing =
+                existingMap.get(chunkIndex);
+
+            // Nếu nội dung không thay đổi và đã có
+            // embedding thì không tạo lại.
+            if (
+                existing &&
+                existing.content === content &&
+                existing.embedding !== null
+            ) {
+                reusedChunks++;
+
+                console.log(
+                    `Bỏ qua đoạn ${chunkIndex + 1}: đã có embedding.`
+                );
+
+                continue;
+            }
+
+            // Tạo embedding.
             const embedding =
                 await createEmbeddingWithRetry(
                     content,
                     document.title
                 );
 
-            if (
-                !Array.isArray(embedding) ||
-                embedding.length !== 768
-            ) {
-                throw new Error(
-                    "Embedding phải có đúng 768 chiều."
-                );
-            }
-
-            indexedChunks.push({
+            // Lưu ngay từng đoạn.
+            await saveDocumentChunk({
                 document_id: document.id,
                 document_title: document.title,
                 chunk_index: chunkIndex,
                 page_number: null,
                 content,
-                embedding: `[${embedding.join(",")}]`,
+                embedding:
+                    `[${embedding.join(",")}]`,
             });
+
+            generatedChunks++;
+
+            console.log(
+                `Đã lưu đoạn ${chunkIndex + 1}/${chunks.length}`
+            );
         }
 
-        // Nghỉ ngắn giữa các nhóm.
+        // Nghỉ giữa các nhóm.
         if (
             batchStart + EMBEDDING_BATCH_SIZE <
             chunks.length
         ) {
-            await new Promise((resolve) =>
-                setTimeout(resolve, 1000)
-            );
+            await sleep(BATCH_DELAY);
         }
     }
 
-    // Chỉ xóa dữ liệu cũ sau khi tạo đủ embedding.
+    // Chỉ xóa các đoạn cũ vượt quá số đoạn hiện tại
+    // sau khi lập chỉ mục hoàn tất.
     const {
-        error: deleteError,
+        error: cleanupError,
     } = await supabase
         .from("document_chunks")
         .delete()
-        .eq("document_id", document.id);
+        .eq("document_id", document.id)
+        .gte("chunk_index", chunks.length);
 
-    if (deleteError) {
+    if (cleanupError) {
         throw new Error(
-            `Không thể xóa chỉ mục cũ: ${deleteError.message}`
+            `Không thể dọn đoạn cũ: ${cleanupError.message}`
         );
-    }
-
-    // Lưu dữ liệu theo từng lô.
-    for (
-        let start = 0;
-        start < indexedChunks.length;
-        start += 50
-    ) {
-        const batch = indexedChunks.slice(
-            start,
-            start + 50
-        );
-
-        const {
-            error: insertError,
-        } = await supabase
-            .from("document_chunks")
-            .insert(batch);
-
-        if (insertError) {
-            throw new Error(
-                `Không thể lưu đoạn tài liệu: ${insertError.message}`
-            );
-        }
     }
 
     console.log(
-        `Đã lập chỉ mục ${document.title}: ${indexedChunks.length} đoạn.`
+        `Hoàn tất lập chỉ mục: ${document.title}`
     );
 
     return {
         success: true,
         documentId: document.id,
         documentTitle: document.title,
-        totalChunks: indexedChunks.length,
+        totalChunks: chunks.length,
+        generatedChunks,
+        reusedChunks,
     };
 };
 
 // =====================================================
-// 4. LẤY DANH SÁCH TÀI LIỆU ĐÃ DUYỆT
+// 7. LẤY DANH SÁCH TÀI LIỆU ĐÃ DUYỆT
 // =====================================================
 
 const getApprovedDocumentsToIndex = async (
@@ -329,7 +518,9 @@ const getApprovedDocumentsToIndex = async (
         error,
     } = await supabase
         .from("documents")
-        .select("id, title, source_type")
+        .select(
+            "id, title, source_type"
+        )
         .eq("status", "APPROVED")
         .order("created_at", {
             ascending: true,
@@ -346,7 +537,7 @@ const getApprovedDocumentsToIndex = async (
 };
 
 // =====================================================
-// 5. LẬP CHỈ MỤC MỘT LÔ TÀI LIỆU
+// 8. LẬP CHỈ MỤC NHIỀU TÀI LIỆU
 // =====================================================
 
 const indexNextApprovedDocuments = async (
@@ -360,9 +551,12 @@ const indexNextApprovedDocuments = async (
     for (const document of documents) {
         try {
             const result =
-                await indexApprovedDocument(document.id);
+                await indexApprovedDocument(
+                    document.id
+                );
 
             results.push(result);
+
         } catch (error) {
             console.error(
                 `Lỗi lập chỉ mục ${document.title}:`,
@@ -386,7 +580,7 @@ const indexNextApprovedDocuments = async (
 };
 
 // =====================================================
-// 6. TÌM KIẾM NỘI DUNG LIÊN QUAN TRONG TOÀN BỘ THƯ VIỆN
+// 9. TÌM KIẾM NỘI DUNG LIÊN QUAN
 // =====================================================
 
 const searchRelevantChunks = async (
@@ -415,7 +609,7 @@ const searchRelevantChunks = async (
         question
     );
 
-    // Bước 1: Chuyển câu hỏi thành vector embedding.
+    // Tạo embedding cho câu hỏi.
     const queryEmbedding =
         await generateQueryEmbedding(
             String(question).trim()
@@ -430,7 +624,7 @@ const searchRelevantChunks = async (
         );
     }
 
-    // Bước 2: Tìm các đoạn tài liệu tương đồng trong Supabase.
+    // Tìm kiếm vector trong Supabase.
     const {
         data,
         error,
@@ -457,7 +651,6 @@ const searchRelevantChunks = async (
         );
     }
 
-    // RPC trả về các đoạn phù hợp.
     const results = data || [];
 
     console.log(
@@ -468,7 +661,7 @@ const searchRelevantChunks = async (
 };
 
 // =====================================================
-// 7. EXPORT
+// 10. EXPORT
 // =====================================================
 
 module.exports = {
