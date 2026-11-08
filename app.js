@@ -30,10 +30,13 @@ app.use(express.json());
 const authRoutes = require("./routes/auth");
 const documentRoutes = require("./routes/document");
 const chatRoutes = require("./routes/chatRoutes");
+const documentIndexRoutes = require("./routes/documentIndexRoutes");
+
 
 app.use("/api/auth", authRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/document-index", documentIndexRoutes);
 
 
 // =====================================================
