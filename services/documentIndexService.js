@@ -21,60 +21,64 @@ const EMBEDDING_BATCH_SIZE = 5;
 
 const MAX_SEARCH_RESULTS = 30;
 
-// Số lần thử lại khi Gemini gặp lỗi.
+const MIN_SIMILARITY = 0.25;
+
 const MAX_EMBEDDING_RETRIES = 6;
 
-// Nghỉ giữa các nhóm embedding.
 const BATCH_DELAY = 1000;
 
+const DOCUMENT_PAGE_SIZE = 100;
+
+const ID_BATCH_SIZE = 100;
+
+const EMBEDDING_DIMENSIONS = 768;
+
 // =====================================================
-// HÀM TIỆN ÍCH
+// 1. HÀM TIỆN ÍCH
 // =====================================================
 
 const sleep = (ms) => {
-    return new Promise((resolve) =>
-        setTimeout(resolve, ms)
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+};
+
+const isValidText = (value) => {
+    return (
+        typeof value === "string" &&
+        value.trim().length > 0
     );
 };
 
 // =====================================================
-// 1. NHẬN DIỆN LỖI QUOTA GEMINI
+// 2. NHẬN DIỆN LỖI QUOTA GEMINI
 // =====================================================
 
 const getGeminiRetryDelay = (error, attempt) => {
-    const message = String(
-        error?.message || ""
-    );
+    const message = String(error?.message || "");
 
-    // Đọc retryDelay từ JSON của Gemini.
     const retryDelayMatch = message.match(
         /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/
     );
 
     if (retryDelayMatch) {
         return (
-            Math.ceil(
-                Number(retryDelayMatch[1]) * 1000
-            ) + 2000
+            Math.ceil(Number(retryDelayMatch[1]) * 1000) +
+            2000
         );
     }
 
-    // Một số lỗi trả về dạng:
-    // Please retry in 10.5s
     const retryMatch = message.match(
         /retry in\s+(\d+(?:\.\d+)?)s/i
     );
 
     if (retryMatch) {
         return (
-            Math.ceil(
-                Number(retryMatch[1]) * 1000
-            ) + 2000
+            Math.ceil(Number(retryMatch[1]) * 1000) +
+            2000
         );
     }
 
-    // Nếu không có thời gian cụ thể,
-    // sử dụng exponential backoff.
     return Math.min(
         5000 * Math.pow(2, attempt - 1),
         60000
@@ -107,7 +111,118 @@ const isRetryableGeminiError = (error) => {
 };
 
 // =====================================================
-// 2. CHIA NỘI DUNG THÀNH CÁC ĐOẠN
+// 3. CHUẨN HÓA EMBEDDING
+// =====================================================
+
+const parseEmbedding = (embedding) => {
+    if (
+        embedding === null ||
+        embedding === undefined
+    ) {
+        return null;
+    }
+
+    try {
+        let result = embedding;
+
+        if (typeof result === "string") {
+            result = JSON.parse(result);
+        }
+
+        if (!Array.isArray(result)) {
+            return null;
+        }
+
+        if (result.length !== EMBEDDING_DIMENSIONS) {
+            return null;
+        }
+
+        const vector = result.map(Number);
+
+        if (
+            vector.some(
+                (value) => !Number.isFinite(value)
+            )
+        ) {
+            return null;
+        }
+
+        return vector;
+
+    } catch (error) {
+        return null;
+    }
+};
+
+// =====================================================
+// 4. KIỂM TRA DỮ LIỆU ĐÃ LẬP CHỈ MỤC
+// =====================================================
+
+const isValidIndexedDocument = (document) => {
+    if (!document) {
+        return false;
+    }
+
+    const chunks = document.chunks;
+
+    if (!Array.isArray(chunks) || !chunks.length) {
+        return false;
+    }
+
+    if (
+        Number(document.total_chunks) !== chunks.length
+    ) {
+        return false;
+    }
+
+    return chunks.every((chunk) => {
+        if (!chunk || !isValidText(chunk.content)) {
+            return false;
+        }
+
+        return Boolean(
+            parseEmbedding(chunk.embedding)
+        );
+    });
+};
+
+// =====================================================
+// 5. TÍNH COSINE SIMILARITY
+// =====================================================
+
+const cosineSimilarity = (vectorA, vectorB) => {
+    if (
+        !Array.isArray(vectorA) ||
+        !Array.isArray(vectorB) ||
+        vectorA.length !== vectorB.length ||
+        vectorA.length === 0
+    ) {
+        return 0;
+    }
+
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < vectorA.length; i++) {
+        dotProduct += vectorA[i] * vectorB[i];
+
+        normA += vectorA[i] * vectorA[i];
+
+        normB += vectorB[i] * vectorB[i];
+    }
+
+    if (normA === 0 || normB === 0) {
+        return 0;
+    }
+
+    return dotProduct / (
+        Math.sqrt(normA) * Math.sqrt(normB)
+    );
+};
+
+// =====================================================
+// 6. CHIA NỘI DUNG THÀNH CÁC ĐOẠN
 // =====================================================
 
 const splitTextIntoChunks = (text) => {
@@ -116,6 +231,7 @@ const splitTextIntoChunks = (text) => {
     }
 
     const cleanText = String(text)
+        .normalize("NFC")
         .replace(/\r\n/g, "\n")
         .replace(/[ \t]+/g, " ")
         .replace(/\n{3,}/g, "\n\n")
@@ -153,6 +269,7 @@ const splitTextIntoChunks = (text) => {
                 paragraphBreak >= 0
                     ? paragraphBreak
                     : -1,
+
                 sentenceBreak >= 0
                     ? sentenceBreak
                     : -1
@@ -188,7 +305,7 @@ const splitTextIntoChunks = (text) => {
 };
 
 // =====================================================
-// 3. TẠO EMBEDDING CÓ TỰ ĐỘNG THỬ LẠI
+// 7. TẠO EMBEDDING CÓ TỰ ĐỘNG THỬ LẠI
 // =====================================================
 
 const createEmbeddingWithRetry = async (
@@ -209,16 +326,15 @@ const createEmbeddingWithRetry = async (
                     title
                 );
 
-            if (
-                !Array.isArray(embedding) ||
-                embedding.length !== 768
-            ) {
+            const vector = parseEmbedding(embedding);
+
+            if (!vector) {
                 throw new Error(
-                    "Embedding phải có đúng 768 chiều."
+                    `Embedding phải có đúng ${EMBEDDING_DIMENSIONS} chiều.`
                 );
             }
 
-            return embedding;
+            return vector;
 
         } catch (error) {
             lastError = error;
@@ -228,8 +344,6 @@ const createEmbeddingWithRetry = async (
                 error.message
             );
 
-            // Không thử lại nếu lỗi không thể khắc phục
-            // bằng cách chờ.
             if (
                 !isRetryableGeminiError(error) ||
                 attempt === MAX_EMBEDDING_RETRIES
@@ -243,7 +357,7 @@ const createEmbeddingWithRetry = async (
             );
 
             console.log(
-                `Gemini đang giới hạn quota. Tự động chờ ${Math.ceil(delay / 1000)} giây...`
+                `Gemini giới hạn quota. Chờ ${Math.ceil(delay / 1000)} giây...`
             );
 
             await sleep(delay);
@@ -254,55 +368,76 @@ const createEmbeddingWithRetry = async (
 };
 
 // =====================================================
-// 4. LẤY CÁC ĐOẠN ĐÃ LẬP CHỈ MỤC
+// 8. LẤY DỮ LIỆU JSON CŨ
 // =====================================================
 
-const getExistingChunks = async (documentId) => {
+const getExistingDocumentContent = async (
+    documentId
+) => {
     const {
         data,
         error,
     } = await supabase
-        .from("document_chunks")
+        .from("document_contents")
         .select(
-            "chunk_index, content, embedding"
+            "document_id, document_title, content, chunks, total_chunks"
         )
-        .eq("document_id", documentId);
+        .eq("document_id", documentId)
+        .maybeSingle();
 
     if (error) {
         throw new Error(
-            `Không thể kiểm tra chỉ mục cũ: ${error.message}`
+            `Không thể đọc dữ liệu JSON cũ: ${error.message}`
         );
     }
 
-    return data || [];
+    return data || null;
 };
 
 // =====================================================
-// 5. LƯU TỪNG ĐOẠN VÀO SUPABASE
+// 9. LƯU TOÀN BỘ TÀI LIỆU VÀO MỘT HÀNG JSONB
 // =====================================================
 
-const saveDocumentChunk = async (chunkData) => {
+const saveDocumentContent = async ({
+    documentId,
+    documentTitle,
+    content,
+    chunks,
+}) => {
+    const payload = {
+        document_id: documentId,
+
+        document_title: documentTitle,
+
+        content,
+
+        chunks,
+
+        total_chunks: chunks.length,
+
+        updated_at: new Date().toISOString(),
+    };
+
     const {
         error,
     } = await supabase
-        .from("document_chunks")
+        .from("document_contents")
         .upsert(
-            chunkData,
+            payload,
             {
-                onConflict:
-                    "document_id,chunk_index",
+                onConflict: "document_id",
             }
         );
 
     if (error) {
         throw new Error(
-            `Không thể lưu đoạn ${chunkData.chunk_index}: ${error.message}`
+            `Không thể lưu nội dung JSON: ${error.message}`
         );
     }
 };
 
 // =====================================================
-// 6. LẬP CHỈ MỤC MỘT TÀI LIỆU
+// 10. LẬP CHỈ MỤC MỘT TÀI LIỆU
 // =====================================================
 
 const indexApprovedDocument = async (
@@ -312,7 +447,7 @@ const indexApprovedDocument = async (
         throw new Error("Thiếu documentId.");
     }
 
-    // Chỉ xử lý tài liệu đã duyệt.
+    // Chỉ lấy tài liệu đã duyệt.
     const {
         data: document,
         error: documentError,
@@ -331,7 +466,7 @@ const indexApprovedDocument = async (
         );
     }
 
-    // Chưa hỗ trợ tài liệu LINK.
+    // Chưa xử lý tài liệu LINK.
     if (document.source_type === "LINK") {
         return {
             success: false,
@@ -368,141 +503,156 @@ const indexApprovedDocument = async (
         );
     }
 
-    // Chia đoạn.
-    const chunks =
+    // Chia nội dung.
+    const textChunks =
         splitTextIntoChunks(documentText);
 
-    if (!chunks.length) {
+    if (!textChunks.length) {
         throw new Error(
             "Không tìm thấy nội dung để lập chỉ mục."
         );
     }
 
     console.log(
-        `Tổng số đoạn cần xử lý: ${chunks.length}`
+        `Tổng số đoạn cần xử lý: ${textChunks.length}`
     );
 
-    // Lấy dữ liệu đã lập chỉ mục trước đó.
-    const existingChunks =
-        await getExistingChunks(document.id);
+    // Đọc dữ liệu JSON cũ.
+    const existingDocument =
+        await getExistingDocumentContent(
+            document.id
+        );
+
+    const existingChunks = Array.isArray(
+        existingDocument?.chunks
+    )
+        ? existingDocument.chunks
+        : [];
 
     const existingMap = new Map();
 
     for (const item of existingChunks) {
-        existingMap.set(
-            item.chunk_index,
-            item
-        );
+        const index = Number(item?.chunk_index);
+
+        if (
+            Number.isInteger(index) &&
+            index >= 0
+        ) {
+            existingMap.set(index, item);
+        }
     }
+
+    const processedChunks = [];
 
     let reusedChunks = 0;
     let generatedChunks = 0;
 
-    // Xử lý từng nhóm.
+    // Xử lý lần lượt từng nhóm.
     for (
         let batchStart = 0;
-        batchStart < chunks.length;
+        batchStart < textChunks.length;
         batchStart += EMBEDDING_BATCH_SIZE
     ) {
-        const batch = chunks.slice(
+        const batch = textChunks.slice(
             batchStart,
             batchStart + EMBEDDING_BATCH_SIZE
         );
 
         console.log(
-            `Đang xử lý đoạn ${batchStart + 1} đến ${batchStart + batch.length}/${chunks.length}`
+            `Đang xử lý đoạn ${batchStart + 1} đến ${batchStart + batch.length}/${textChunks.length}`
         );
 
         for (let i = 0; i < batch.length; i++) {
             const chunkIndex = batchStart + i;
 
-            const content = batch[i];
+            const chunkContent = batch[i];
 
             const existing =
                 existingMap.get(chunkIndex);
 
-            // Nếu nội dung không thay đổi và đã có
-            // embedding thì không tạo lại.
+            let embedding = null;
+
+            // Tái sử dụng embedding nếu nội dung không đổi.
             if (
                 existing &&
-                existing.content === content &&
-                existing.embedding !== null
+                existing.content === chunkContent
             ) {
-                reusedChunks++;
-
-                console.log(
-                    `Bỏ qua đoạn ${chunkIndex + 1}: đã có embedding.`
+                embedding = parseEmbedding(
+                    existing.embedding
                 );
-
-                continue;
             }
 
-            // Tạo embedding.
-            const embedding =
-                await createEmbeddingWithRetry(
-                    content,
-                    document.title
-                );
+            if (embedding) {
+                reusedChunks++;
 
-            // Lưu ngay từng đoạn.
-            await saveDocumentChunk({
-                document_id: document.id,
-                document_title: document.title,
+            } else {
+                embedding =
+                    await createEmbeddingWithRetry(
+                        chunkContent,
+                        document.title
+                    );
+
+                generatedChunks++;
+            }
+
+            processedChunks.push({
                 chunk_index: chunkIndex,
-                page_number: null,
-                content,
-                embedding:
-                    `[${embedding.join(",")}]`,
+
+                page_number:
+                    existing?.page_number ?? null,
+
+                content: chunkContent,
+
+                embedding,
             });
-
-            generatedChunks++;
-
-            console.log(
-                `Đã lưu đoạn ${chunkIndex + 1}/${chunks.length}`
-            );
         }
 
-        // Nghỉ giữa các nhóm.
         if (
             batchStart + EMBEDDING_BATCH_SIZE <
-            chunks.length
+            textChunks.length
         ) {
             await sleep(BATCH_DELAY);
         }
     }
 
-    // Chỉ xóa các đoạn cũ vượt quá số đoạn hiện tại
-    // sau khi lập chỉ mục hoàn tất.
-    const {
-        error: cleanupError,
-    } = await supabase
-        .from("document_chunks")
-        .delete()
-        .eq("document_id", document.id)
-        .gte("chunk_index", chunks.length);
+    // Ghép toàn bộ nội dung.
+    const fullContent = processedChunks
+        .map((item) => item.content)
+        .join("\n\n");
 
-    if (cleanupError) {
-        throw new Error(
-            `Không thể dọn đoạn cũ: ${cleanupError.message}`
-        );
-    }
+    // Ghi một lần vào Supabase.
+    await saveDocumentContent({
+        documentId: document.id,
+        documentTitle: document.title,
+        content: fullContent,
+        chunks: processedChunks,
+    });
 
     console.log(
-        `Hoàn tất lập chỉ mục: ${document.title}`
+        `Hoàn tất lập chỉ mục JSON: ${document.title}`
     );
 
     return {
         success: true,
+
+        storage: "document_contents",
+
         documentId: document.id,
+
         documentTitle: document.title,
-        totalChunks: chunks.length,
+
+        totalChunks: processedChunks.length,
+
+        totalRows: 1,
+
         generatedChunks,
+
         reusedChunks,
     };
 };
 
 // =====================================================
-// 7. LẤY DANH SÁCH TÀI LIỆU ĐÃ DUYỆT
+// 11. LẤY TÀI LIỆU ĐÃ DUYỆT CHƯA LẬP CHỈ MỤC
 // =====================================================
 
 const getApprovedDocumentsToIndex = async (
@@ -513,31 +663,108 @@ const getApprovedDocumentsToIndex = async (
         50
     );
 
-    const {
-        data,
-        error,
-    } = await supabase
-        .from("documents")
-        .select(
-            "id, title, source_type"
-        )
-        .eq("status", "APPROVED")
-        .order("created_at", {
-            ascending: true,
-        })
-        .limit(safeLimit);
+    const pendingDocuments = [];
 
-    if (error) {
-        throw new Error(
-            `Không thể lấy danh sách tài liệu: ${error.message}`
+    let from = 0;
+
+    // Đọc từng trang tài liệu.
+    while (pendingDocuments.length < safeLimit) {
+        const to = from + DOCUMENT_PAGE_SIZE - 1;
+
+        const {
+            data: documents,
+            error: documentError,
+        } = await supabase
+            .from("documents")
+            .select(
+                "id, title, source_type, file_path"
+            )
+            .eq("status", "APPROVED")
+            .order("created_at", {
+                ascending: true,
+            })
+            .range(from, to);
+
+        if (documentError) {
+            throw new Error(
+                `Không thể lấy danh sách tài liệu: ${documentError.message}`
+            );
+        }
+
+        const rows = documents || [];
+
+        if (!rows.length) {
+            break;
+        }
+
+        // Chỉ xử lý tài liệu có file.
+        const eligibleDocuments = rows.filter(
+            (document) => (
+                document.source_type !== "LINK" &&
+                Boolean(document.file_path)
+            )
         );
+
+        if (eligibleDocuments.length) {
+            const ids = eligibleDocuments.map(
+                (item) => item.id
+            );
+
+            const {
+                data: indexedRows,
+                error: indexedError,
+            } = await supabase
+                .from("document_contents")
+                .select(
+                    "document_id, total_chunks, chunks"
+                )
+                .in("document_id", ids);
+
+            if (indexedError) {
+                throw new Error(
+                    `Không thể kiểm tra dữ liệu đã lập chỉ mục: ${indexedError.message}`
+                );
+            }
+
+            const indexedMap = new Map(
+                (indexedRows || []).map((item) => [
+                    item.document_id,
+                    item,
+                ])
+            );
+
+            for (const document of eligibleDocuments) {
+                const indexed = indexedMap.get(
+                    document.id
+                );
+
+                // Bỏ qua tài liệu đã có đủ embedding hợp lệ.
+                if (isValidIndexedDocument(indexed)) {
+                    continue;
+                }
+
+                pendingDocuments.push(document);
+
+                if (
+                    pendingDocuments.length >= safeLimit
+                ) {
+                    break;
+                }
+            }
+        }
+
+        if (rows.length < DOCUMENT_PAGE_SIZE) {
+            break;
+        }
+
+        from += DOCUMENT_PAGE_SIZE;
     }
 
-    return data || [];
+    return pendingDocuments;
 };
 
 // =====================================================
-// 8. LẬP CHỈ MỤC NHIỀU TÀI LIỆU
+// 12. LẬP CHỈ MỤC NHIỀU TÀI LIỆU
 // =====================================================
 
 const indexNextApprovedDocuments = async (
@@ -573,101 +800,248 @@ const indexNextApprovedDocuments = async (
     }
 
     return {
-        success: true,
+        success: results.every(
+            (item) => item.success || item.skipped
+        ),
+
         total: documents.length,
+
+        successful: results.filter(
+            (item) => item.success
+        ).length,
+
+        failed: results.filter(
+            (item) => !item.success && !item.skipped
+        ).length,
+
         results,
     };
 };
 
 // =====================================================
-// 9. TÌM KIẾM NỘI DUNG LIÊN QUAN
+// 13. LẤY TOÀN BỘ ID TÀI LIỆU ĐÃ DUYỆT
+// =====================================================
+
+const getAllApprovedDocumentIds = async () => {
+    const allDocuments = [];
+
+    let from = 0;
+
+    while (true) {
+        const to = from + DOCUMENT_PAGE_SIZE - 1;
+
+        const {
+            data,
+            error,
+        } = await supabase
+            .from("documents")
+            .select("id, title")
+            .eq("status", "APPROVED")
+            .order("id", {
+                ascending: true,
+            })
+            .range(from, to);
+
+        if (error) {
+            throw new Error(
+                `Không thể lấy danh sách tài liệu đã duyệt: ${error.message}`
+            );
+        }
+
+        const rows = data || [];
+
+        allDocuments.push(...rows);
+
+        if (rows.length < DOCUMENT_PAGE_SIZE) {
+            break;
+        }
+
+        from += DOCUMENT_PAGE_SIZE;
+    }
+
+    return allDocuments;
+};
+
+// =====================================================
+// 14. TÌM KIẾM NỘI DUNG TRONG DOCUMENT_CONTENTS
 // =====================================================
 
 const searchRelevantChunks = async (
     question,
     limit = 15
 ) => {
-    if (
-        !question ||
-        !String(question).trim()
-    ) {
+    if (!isValidText(question)) {
         throw new Error(
             "Vui lòng nhập câu hỏi tìm kiếm."
         );
     }
 
     const safeLimit = Math.min(
-        Math.max(
-            Number(limit) || 15,
-            1
-        ),
+        Math.max(Number(limit) || 15, 1),
         MAX_SEARCH_RESULTS
     );
 
     console.log(
-        "Bắt đầu tìm kiếm nội dung thư viện:",
+        "Bắt đầu tìm kiếm thư viện JSON:",
         question
     );
 
-    // Tạo embedding cho câu hỏi.
+    // 1. Tạo embedding câu hỏi.
     const queryEmbedding =
         await generateQueryEmbedding(
             String(question).trim()
         );
 
-    if (
-        !Array.isArray(queryEmbedding) ||
-        queryEmbedding.length !== 768
-    ) {
-        throw new Error(
-            "Vector câu hỏi không đúng 768 chiều."
-        );
-    }
-
-    // Tìm kiếm vector trong Supabase.
-    const {
-        data,
-        error,
-    } = await supabase.rpc(
-        "match_document_chunks",
-        {
-            query_embedding:
-                `[${queryEmbedding.join(",")}]`,
-
-            match_count: safeLimit,
-
-            match_threshold: 0.25,
-        }
+    const queryVector = parseEmbedding(
+        queryEmbedding
     );
 
-    if (error) {
-        console.error(
-            "SEARCH RELEVANT CHUNKS ERROR:",
-            error
-        );
-
+    if (!queryVector) {
         throw new Error(
-            `Không thể tìm kiếm nội dung tài liệu: ${error.message}`
+            `Vector câu hỏi không đúng ${EMBEDDING_DIMENSIONS} chiều.`
         );
     }
 
-    const results = data || [];
+    // 2. Lấy danh sách tài liệu đã duyệt.
+    const approvedDocuments =
+        await getAllApprovedDocumentIds();
+
+    if (!approvedDocuments.length) {
+        return [];
+    }
+
+    const approvedMap = new Map(
+        approvedDocuments.map((item) => [
+            item.id,
+            item.title,
+        ])
+    );
+
+    const approvedIds = approvedDocuments.map(
+        (item) => item.id
+    );
+
+    const results = [];
+
+    // 3. Đọc JSONB theo từng nhóm ID.
+    for (
+        let i = 0;
+        i < approvedIds.length;
+        i += ID_BATCH_SIZE
+    ) {
+        const ids = approvedIds.slice(
+            i,
+            i + ID_BATCH_SIZE
+        );
+
+        const {
+            data,
+            error,
+        } = await supabase
+            .from("document_contents")
+            .select(
+                "document_id, document_title, chunks"
+            )
+            .in("document_id", ids);
+
+        if (error) {
+            throw new Error(
+                `Không thể đọc dữ liệu JSON thư viện: ${error.message}`
+            );
+        }
+
+        // 4. Tính similarity cho từng chunk.
+        for (const document of data || []) {
+            if (
+                !approvedMap.has(document.document_id)
+            ) {
+                continue;
+            }
+
+            const chunks = Array.isArray(
+                document.chunks
+            )
+                ? document.chunks
+                : [];
+
+            for (const chunk of chunks) {
+                if (
+                    !chunk ||
+                    !isValidText(chunk.content)
+                ) {
+                    continue;
+                }
+
+                const embedding = parseEmbedding(
+                    chunk.embedding
+                );
+
+                if (!embedding) {
+                    continue;
+                }
+
+                const similarity = cosineSimilarity(
+                    queryVector,
+                    embedding
+                );
+
+                if (similarity < MIN_SIMILARITY) {
+                    continue;
+                }
+
+                results.push({
+                    document_id: document.document_id,
+
+                    document_title:
+                        document.document_title ||
+                        approvedMap.get(
+                            document.document_id
+                        ),
+
+                    chunk_index: chunk.chunk_index,
+
+                    page_number:
+                        chunk.page_number ?? null,
+
+                    content: chunk.content,
+
+                    similarity,
+                });
+            }
+        }
+    }
+
+    // 5. Sắp xếp độ liên quan giảm dần.
+    results.sort(
+        (a, b) => b.similarity - a.similarity
+    );
+
+    const finalResults = results.slice(
+        0,
+        safeLimit
+    );
 
     console.log(
-        `Tìm thấy ${results.length} đoạn tài liệu liên quan.`
+        `Tìm thấy ${finalResults.length} đoạn JSON liên quan.`
     );
 
-    return results;
+    return finalResults;
 };
 
 // =====================================================
-// 10. EXPORT
+// 15. EXPORT
 // =====================================================
 
 module.exports = {
     splitTextIntoChunks,
+
     indexApprovedDocument,
+
     getApprovedDocumentsToIndex,
+
     indexNextApprovedDocuments,
+
+    getAllApprovedDocumentIds,
+
     searchRelevantChunks,
 };
