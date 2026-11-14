@@ -44,18 +44,13 @@ const uploadWordSet = async (req, res) => {
             });
         }
 
-        // Đọc cấu trúc ghép nối
+        // Đọc dữ liệu từ Excel
         let gameData;
 
         try {
-            gameData = readMatchingFromExcel(
-                req.file.buffer
-            );
+            gameData = readMatchingFromExcel(req.file.buffer);
         } catch (error) {
-            console.error(
-                "READ MATCHING EXCEL ERROR:",
-                error
-            );
+            console.error("READ MATCHING EXCEL ERROR:", error);
 
             return res.status(400).json({
                 success: false,
@@ -65,25 +60,98 @@ const uploadWordSet = async (req, res) => {
             });
         }
 
-        if (
-            !gameData ||
-            gameData.game_type !== "MATCHING" ||
-            !gameData.questions?.length ||
-            !gameData.options?.length
-        ) {
+        // Kiểm tra cấu trúc dữ liệu
+        if (!gameData || gameData.game_type !== "MATCHING") {
             return res.status(400).json({
                 success: false,
-                message:
-                    "File Excel không có dữ liệu ghép nối hợp lệ.",
+                message: "File Excel không đúng định dạng ghép nối.",
             });
         }
 
+        // Bắt buộc ít nhất một câu hỏi
+        if (
+            !Array.isArray(gameData.questions) ||
+            gameData.questions.length < 1
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Quiz cần có ít nhất một câu hỏi.",
+            });
+        }
+
+        // Bắt buộc ít nhất một đáp án
+        if (
+            !Array.isArray(gameData.options) ||
+            gameData.options.length < 1
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Quiz cần có ít nhất một đáp án.",
+            });
+        }
+
+        // Kiểm tra nội dung câu hỏi
+        const invalidQuestion = gameData.questions.some(
+            (question) =>
+                !question ||
+                !String(question.left_text || "").trim() ||
+                question.id === undefined ||
+                question.id === null
+        );
+
+        if (invalidQuestion) {
+            return res.status(400).json({
+                success: false,
+                message: "Có câu hỏi bị thiếu nội dung hoặc mã câu hỏi.",
+            });
+        }
+
+        // Kiểm tra nội dung đáp án
+        const invalidOption = gameData.options.some(
+            (option) =>
+                !option ||
+                !String(option.right_text || "").trim() ||
+                option.option_key === undefined ||
+                option.option_key === null
+        );
+
+        if (invalidOption) {
+            return res.status(400).json({
+                success: false,
+                message: "Có đáp án bị thiếu nội dung hoặc mã đáp án.",
+            });
+        }
+
+        // Kiểm tra đáp án đúng có tồn tại trong danh sách lựa chọn
+        const optionKeys = new Set(
+            gameData.options.map((option) =>
+                String(option.option_key).trim()
+            )
+        );
+
+        const invalidAnswer = gameData.questions.some((question) => {
+            const answerKey = String(
+                question.correct_option_key
+            ).trim();
+
+            return answerKey !== "0" && !optionKeys.has(answerKey);
+        });
+
+        if (invalidAnswer) {
+            return res.status(400).json({
+                success: false,
+                message: "Có câu hỏi tham chiếu đến mã đáp án không tồn tại.",
+            });
+        }
+
+        // Người upload
         const uploaderId =
             req.user?.id ||
             req.user?.userId ||
             req.user?.user_id ||
             null;
 
+        // Chỉ lưu sau khi toàn bộ dữ liệu hợp lệ
         const result = await createWordSet({
             title: title.trim(),
 

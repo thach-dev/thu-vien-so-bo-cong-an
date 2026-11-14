@@ -3,6 +3,9 @@ const supabase = require("../config/supabase");
 
 const TABLE_NAME = "word_chain_sets";
 
+const MAX_QUESTIONS = 1000;
+const MAX_OPTIONS = 1000;
+
 // =====================================================
 // 1. CHUẨN HÓA TỪ CŨ
 // =====================================================
@@ -65,7 +68,7 @@ const normalizeWords = (words) => {
         );
     }
 
-    if (result.length > 1000) {
+    if (result.length > MAX_QUESTIONS) {
         throw new Error(
             "Một bộ từ không được vượt quá 1000 từ."
         );
@@ -82,6 +85,7 @@ const normalizeMatchingData = (gameData) => {
     if (
         !gameData ||
         typeof gameData !== "object" ||
+        gameData.game_type !== "MATCHING" ||
         !Array.isArray(gameData.questions) ||
         !Array.isArray(gameData.options)
     ) {
@@ -90,38 +94,62 @@ const normalizeMatchingData = (gameData) => {
         );
     }
 
-    if (
-        gameData.questions.length === 0 ||
-        gameData.options.length === 0
-    ) {
+    if (gameData.questions.length < 1) {
         throw new Error(
-            "Bộ ghép nối phải có câu hỏi và phương án."
+            "Quiz cần có ít nhất một câu hỏi."
+        );
+    }
+
+    if (gameData.options.length < 1) {
+        throw new Error(
+            "Quiz cần có ít nhất một đáp án."
         );
     }
 
     if (
-        gameData.questions.length > 1000 ||
-        gameData.options.length > 1000
+        gameData.questions.length > MAX_QUESTIONS ||
+        gameData.options.length > MAX_OPTIONS
     ) {
         throw new Error(
-            "Bộ ghép nối không được vượt quá 1000 câu hoặc phương án."
+            "Bộ ghép nối không được vượt quá 1000 câu hỏi hoặc phương án."
         );
     }
 
+    // Chuẩn hóa phương án
     const optionKeys = new Set();
 
-    const options = gameData.options.map((item) => {
+    const options = gameData.options.map((item, index) => {
         const optionKey = String(
-            item?.option_key || ""
-        ).trim().toUpperCase();
+            item?.option_key ?? ""
+        )
+            .trim()
+            .toUpperCase();
 
         const rightText = String(
-            item?.right_text || ""
-        ).normalize("NFC").trim();
+            item?.right_text ?? ""
+        )
+            .normalize("NFC")
+            .trim()
+            .replace(/\s+/g, " ");
 
-        if (!optionKey || !rightText) {
+        if (
+            !optionKey ||
+            !rightText
+        ) {
             throw new Error(
-                "Phương án ghép nối không hợp lệ."
+                `Phương án thứ ${index + 1} không hợp lệ.`
+            );
+        }
+
+        if (!/^[A-Z0-9]+$/.test(optionKey)) {
+            throw new Error(
+                `Mã phương án ${optionKey} không hợp lệ.`
+            );
+        }
+
+        if (rightText.length > 5000) {
+            throw new Error(
+                `Nội dung phương án ${optionKey} quá dài.`
             );
         }
 
@@ -139,22 +167,40 @@ const normalizeMatchingData = (gameData) => {
         };
     });
 
+    // Chuẩn hóa câu hỏi
     const questionIds = new Set();
 
     const questions = gameData.questions.map((item, index) => {
         const id = item?.id ?? index + 1;
 
         const leftText = String(
-            item?.left_text || ""
-        ).normalize("NFC").trim();
+            item?.left_text ?? ""
+        )
+            .normalize("NFC")
+            .trim()
+            .replace(/\s+/g, " ");
 
         const correctKey = String(
-            item?.correct_option_key || ""
-        ).trim().toUpperCase();
+            item?.correct_option_key ?? ""
+        )
+            .trim()
+            .toUpperCase();
 
         if (!leftText || !correctKey) {
             throw new Error(
                 `Câu hỏi thứ ${index + 1} không hợp lệ.`
+            );
+        }
+
+        if (String(id).length > 100) {
+            throw new Error(
+                `ID câu hỏi thứ ${index + 1} quá dài.`
+            );
+        }
+
+        if (leftText.length > 5000) {
+            throw new Error(
+                `Nội dung câu hỏi thứ ${index + 1} quá dài.`
             );
         }
 
@@ -170,6 +216,15 @@ const normalizeMatchingData = (gameData) => {
         ) {
             throw new Error(
                 `Câu ${id} có đáp án ${correctKey} không tồn tại.`
+            );
+        }
+
+        if (
+            correctKey !== "0" &&
+            !/^[A-Z0-9]+$/.test(correctKey)
+        ) {
+            throw new Error(
+                `Mã đáp án của câu ${id} không hợp lệ.`
             );
         }
 
@@ -192,7 +247,7 @@ const normalizeMatchingData = (gameData) => {
 };
 
 // =====================================================
-// 4. LẤY DANH SÁCH BỘ TỪ ĐÃ APPROVED
+// 4. LẤY DANH SÁCH BỘ DỮ LIỆU ĐÃ APPROVED
 // =====================================================
 
 const getApprovedWordSets = async () => {
@@ -257,7 +312,7 @@ const getWordSetById = async (id) => {
 
 // =====================================================
 // 6. LẤY DỮ LIỆU CHO HOST TẠO PHÒNG
-// Hỗ trợ cả bộ từ cũ và ghép nối mới
+// Hỗ trợ dữ liệu cũ và ghép nối mới
 // =====================================================
 
 const getWordSetForHost = async (id) => {
@@ -340,7 +395,7 @@ const createWordSet = async ({
 
         total_words: normalizedData.total_questions,
 
-        // JSONB chứa toàn bộ câu hỏi và phương án
+        // Toàn bộ câu hỏi và phương án nằm trong JSONB
         words: normalizedData,
     };
 

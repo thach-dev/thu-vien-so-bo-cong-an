@@ -2,6 +2,7 @@
 const XLSX = require("xlsx");
 
 const MAX_QUESTIONS = 1000;
+const MAX_OPTIONS = 1000;
 
 const normalizeText = (value) => {
     return String(value ?? "")
@@ -20,13 +21,7 @@ const normalizeWord = (value) => {
 
 // =====================================================
 // ĐỌC EXCEL GHÉP NỐI HAI CỘT
-//
 // Sheet: DU_LIEU
-// STT
-// NOI_DUNG_COT_SO
-// DAP_AN_DUNG
-// KY_HIEU_COT_CHU
-// NOI_DUNG_COT_CHU
 // =====================================================
 
 const readMatchingFromExcel = (buffer) => {
@@ -34,9 +29,15 @@ const readMatchingFromExcel = (buffer) => {
         throw new Error("File Excel không hợp lệ.");
     }
 
-    const workbook = XLSX.read(buffer, {
-        type: "buffer",
-    });
+    let workbook;
+
+    try {
+        workbook = XLSX.read(buffer, {
+            type: "buffer",
+        });
+    } catch (error) {
+        throw new Error("Không thể đọc file Excel.");
+    }
 
     if (!workbook.SheetNames.includes("DU_LIEU")) {
         throw new Error(
@@ -111,6 +112,7 @@ const readMatchingFromExcel = (buffer) => {
 
         const excelRow = i + 1;
 
+        // Bỏ qua dòng hoàn toàn trống
         if (
             !questionId &&
             !leftText &&
@@ -121,6 +123,7 @@ const readMatchingFromExcel = (buffer) => {
             continue;
         }
 
+        // Kiểm tra đủ dữ liệu
         if (
             !questionId ||
             !leftText ||
@@ -133,7 +136,10 @@ const readMatchingFromExcel = (buffer) => {
             );
         }
 
-        if (leftText.length > 5000 || rightText.length > 5000) {
+        if (
+            leftText.length > 5000 ||
+            rightText.length > 5000
+        ) {
             throw new Error(
                 `Nội dung tại dòng ${excelRow} quá dài.`
             );
@@ -182,27 +188,39 @@ const readMatchingFromExcel = (buffer) => {
 
         if (questions.length > MAX_QUESTIONS) {
             throw new Error(
-                `File chỉ được chứa tối đa ${MAX_QUESTIONS} câu.`
+                `File chỉ được chứa tối đa ${MAX_QUESTIONS} câu hỏi.`
+            );
+        }
+
+        if (options.length > MAX_OPTIONS) {
+            throw new Error(
+                `File chỉ được chứa tối đa ${MAX_OPTIONS} phương án.`
             );
         }
     }
 
-    if (!questions.length || !options.length) {
+    // Bắt buộc ít nhất một câu hỏi
+    if (questions.length < 1) {
         throw new Error(
-            "Không tìm thấy dữ liệu ghép nối hợp lệ."
+            "Quiz cần có ít nhất một câu hỏi."
         );
     }
 
-    // Kiểm tra mã đáp án phải tồn tại trong danh sách phương án.
+    // Bắt buộc ít nhất một phương án
+    if (options.length < 1) {
+        throw new Error(
+            "Quiz cần có ít nhất một đáp án."
+        );
+    }
+
+    // Kiểm tra đáp án đúng tồn tại
     for (const question of questions) {
         if (
             question.correct_option_key !== "0" &&
             !optionKeys.has(question.correct_option_key)
         ) {
             throw new Error(
-                `Câu ${question.id} có đáp án ${
-                    question.correct_option_key
-                } nhưng không tồn tại phương án tương ứng.`
+                `Câu ${question.id} có đáp án ${question.correct_option_key} nhưng không tồn tại phương án tương ứng.`
             );
         }
     }
@@ -218,7 +236,7 @@ const readMatchingFromExcel = (buffer) => {
 
 // =====================================================
 // ĐỌC FILE NỐI TỪ CŨ
-// Giữ lại để không làm hỏng dữ liệu cũ
+// Giữ lại để tương thích dữ liệu cũ
 // =====================================================
 
 const readWordsFromExcel = (buffer) => {
