@@ -31,6 +31,7 @@ const authRoutes = require("./routes/auth");
 const documentRoutes = require("./routes/document");
 const chatRoutes = require("./routes/chatRoutes");
 const documentIndexRoutes = require("./routes/documentIndexRoutes");
+const wordChainRoutes = require("./routes/wordChainRoutes");
 
 
 app.use("/api/auth", authRoutes);
@@ -63,6 +64,11 @@ app.use(
     require("./routes/googleScriptRoutes")
 );
 // =====================================================
+// ROUTE GAME NỐI TỪ
+// =====================================================
+
+app.use("/api/word-chain", wordChainRoutes);
+// =====================================================
 // 404
 // =====================================================
 app.use((req, res) => {
@@ -87,6 +93,8 @@ const io = new Server(server, {
 // Đăng ký sự kiện game
 const registerQuizSocket = require("./sockets/quizSocket");
 registerQuizSocket(io);
+
+
 
 // =====================================================
 // EXPORT
