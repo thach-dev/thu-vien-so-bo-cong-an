@@ -26,11 +26,15 @@ const upload = multer({
     },
 
     fileFilter: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
+        const ext = path.extname(
+            file.originalname
+        ).toLowerCase();
 
         if (![".xlsx", ".xls"].includes(ext)) {
             return cb(
-                new Error("Chỉ chấp nhận file Excel .xlsx hoặc .xls.")
+                new Error(
+                    "Chỉ chấp nhận file Excel .xlsx hoặc .xls."
+                )
             );
         }
 
@@ -42,20 +46,29 @@ const upload = multer({
 // API
 // =====================================================
 
-// Danh sách bộ từ đã duyệt
+// Danh sách bộ ghép nối đã duyệt
 router.get("/sets", getWordSets);
 
-// Chi tiết bộ từ
+// Chi tiết bộ ghép nối
 router.get("/sets/:id", getWordSetDetail);
 
-// Upload Excel công khai
+// Upload Excel
 router.post(
     "/upload",
-    upload.single("file"),
+    (req, res, next) => {
+        upload.single("file")(req, res, (error) => {
+            if (!error) return next();
+
+            return res.status(400).json({
+                success: false,
+                message: error.message || "Lỗi upload file.",
+            });
+        });
+    },
     uploadWordSet
 );
 
-// Xóa bộ từ: chỉ ADMIN
+// Xóa bộ dữ liệu: chỉ ADMIN
 router.delete(
     "/sets/:id",
     requireAdmin,

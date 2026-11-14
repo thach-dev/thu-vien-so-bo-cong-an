@@ -1,6 +1,6 @@
 
 const {
-    readWordsFromExcel,
+    readMatchingFromExcel,
 } = require("../utils/wordChainExcel");
 
 const {
@@ -11,15 +11,14 @@ const {
 } = require("../services/wordChainService");
 
 // =====================================================
-// 1. UPLOAD BỘ TỪ EXCEL
-// Công khai, không bắt buộc đăng nhập
+// 1. UPLOAD EXCEL GHÉP NỐI
+// Upload thành công tự động APPROVED
 // =====================================================
 
 const uploadWordSet = async (req, res) => {
     try {
         const { title, description } = req.body || {};
 
-        // Kiểm tra tên bộ từ
         if (
             !title ||
             typeof title !== "string" ||
@@ -27,18 +26,17 @@ const uploadWordSet = async (req, res) => {
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Vui lòng nhập tên bộ từ.",
+                message: "Vui lòng nhập tên bộ dữ liệu.",
             });
         }
 
         if (title.trim().length > 255) {
             return res.status(400).json({
                 success: false,
-                message: "Tên bộ từ không được vượt quá 255 ký tự.",
+                message: "Tên bộ dữ liệu không được vượt quá 255 ký tự.",
             });
         }
 
-        // Kiểm tra file Excel
         if (!req.file || !req.file.buffer) {
             return res.status(400).json({
                 success: false,
@@ -46,13 +44,18 @@ const uploadWordSet = async (req, res) => {
             });
         }
 
-        // Đọc dữ liệu Excel
-        let words;
+        // Đọc cấu trúc ghép nối
+        let gameData;
 
         try {
-            words = readWordsFromExcel(req.file.buffer);
+            gameData = readMatchingFromExcel(
+                req.file.buffer
+            );
         } catch (error) {
-            console.error("READ EXCEL ERROR:", error);
+            console.error(
+                "READ MATCHING EXCEL ERROR:",
+                error
+            );
 
             return res.status(400).json({
                 success: false,
@@ -62,40 +65,46 @@ const uploadWordSet = async (req, res) => {
             });
         }
 
-        if (!Array.isArray(words) || words.length === 0) {
+        if (
+            !gameData ||
+            gameData.game_type !== "MATCHING" ||
+            !gameData.questions?.length ||
+            !gameData.options?.length
+        ) {
             return res.status(400).json({
                 success: false,
-                message: "File Excel không có từ vựng hợp lệ.",
+                message:
+                    "File Excel không có dữ liệu ghép nối hợp lệ.",
             });
         }
 
-        // Lấy ID người upload nếu có đăng nhập
         const uploaderId =
             req.user?.id ||
             req.user?.userId ||
             req.user?.user_id ||
             null;
 
-        // Lưu bộ từ vào Supabase
         const result = await createWordSet({
             title: title.trim(),
+
             description:
                 typeof description === "string"
                     ? description.trim()
                     : null,
+
             uploaderId,
-            words,
+            gameData,
         });
 
         return res.status(201).json({
             success: true,
             message:
-                "Upload bộ từ thành công. Bộ từ đang chờ quản trị viên duyệt.",
+                "Upload bộ ghép nối thành công. Bạn có thể vào kho game để chơi ngay.",
             data: result,
         });
 
     } catch (error) {
-        console.error("UPLOAD WORD SET ERROR:", {
+        console.error("UPLOAD MATCHING SET ERROR:", {
             message: error.message,
             details: error.details,
             hint: error.hint,
@@ -105,7 +114,7 @@ const uploadWordSet = async (req, res) => {
 
         return res.status(500).json({
             success: false,
-            message: "Không thể upload bộ từ.",
+            message: "Không thể upload bộ ghép nối.",
             error: error.message || null,
             code: error.code || null,
         });
@@ -113,7 +122,7 @@ const uploadWordSet = async (req, res) => {
 };
 
 // =====================================================
-// 2. LẤY DANH SÁCH BỘ TỪ ĐÃ DUYỆT
+// 2. DANH SÁCH BỘ DỮ LIỆU
 // GET /api/word-chain/sets
 // =====================================================
 
@@ -121,7 +130,6 @@ const getWordSets = async (req, res) => {
     try {
         const data = await getApprovedWordSets();
 
-        // Đảm bảo dữ liệu trả về là mảng
         const wordSets = Array.isArray(data) ? data : [];
 
         return res.status(200).json({
@@ -131,28 +139,19 @@ const getWordSets = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("GET WORD SETS ERROR:", {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-            stack: error.stack,
-        });
+        console.error("GET WORD SETS ERROR:", error);
 
-        // Tạm thời trả lỗi chi tiết để kiểm tra nguyên nhân
         return res.status(500).json({
             success: false,
-            message: "Không thể lấy danh sách bộ từ.",
+            message: "Không thể lấy danh sách bộ dữ liệu.",
             error: error.message || null,
-            details: error.details || null,
-            hint: error.hint || null,
             code: error.code || null,
         });
     }
 };
 
 // =====================================================
-// 3. XEM CHI TIẾT BỘ TỪ
+// 3. CHI TIẾT BỘ DỮ LIỆU
 // GET /api/word-chain/sets/:id
 // =====================================================
 
@@ -163,19 +162,11 @@ const getWordSetDetail = async (req, res) => {
         if (!id) {
             return res.status(400).json({
                 success: false,
-                message: "Thiếu ID bộ từ.",
+                message: "Thiếu ID bộ dữ liệu.",
             });
         }
 
         const data = await getWordSetById(id);
-
-        if (!data) {
-            return res.status(404).json({
-                success: false,
-                message:
-                    "Không tìm thấy bộ từ hoặc bộ từ chưa được duyệt.",
-            });
-        }
 
         return res.status(200).json({
             success: true,
@@ -183,17 +174,14 @@ const getWordSetDetail = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("GET WORD SET DETAIL ERROR:", {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-            stack: error.stack,
-        });
+        const notFound =
+            error.message === "Không tìm thấy bộ dữ liệu.";
 
-        return res.status(500).json({
+        return res.status(notFound ? 404 : 500).json({
             success: false,
-            message: "Không thể lấy chi tiết bộ từ.",
+            message: notFound
+                ? error.message
+                : "Không thể lấy chi tiết bộ dữ liệu.",
             error: error.message || null,
             code: error.code || null,
         });
@@ -201,7 +189,7 @@ const getWordSetDetail = async (req, res) => {
 };
 
 // =====================================================
-// 4. XÓA BỘ TỪ
+// 4. XÓA BỘ DỮ LIỆU
 // DELETE /api/word-chain/sets/:id
 // Route phải có requireAdmin
 // =====================================================
@@ -213,7 +201,7 @@ const removeWordSet = async (req, res) => {
         if (!id) {
             return res.status(400).json({
                 success: false,
-                message: "Thiếu ID bộ từ cần xóa.",
+                message: "Thiếu ID bộ dữ liệu cần xóa.",
             });
         }
 
@@ -221,21 +209,15 @@ const removeWordSet = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Đã xóa bộ từ.",
+            message: "Đã xóa bộ dữ liệu.",
         });
 
     } catch (error) {
-        console.error("DELETE WORD SET ERROR:", {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-            stack: error.stack,
-        });
+        console.error("DELETE WORD SET ERROR:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Không thể xóa bộ từ.",
+            message: "Không thể xóa bộ dữ liệu.",
             error: error.message || null,
             code: error.code || null,
         });

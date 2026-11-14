@@ -4,7 +4,7 @@ const supabase = require("../config/supabase");
 const TABLE_NAME = "word_chain_sets";
 
 // =====================================================
-// 1. CHUẨN HÓA TỪ
+// 1. CHUẨN HÓA TỪ CŨ
 // =====================================================
 
 const normalizeWord = (word) => {
@@ -16,8 +16,7 @@ const normalizeWord = (word) => {
 };
 
 // =====================================================
-// 2. CHUẨN HÓA DANH SÁCH TỪ
-// Một bộ từ được lưu trong một dòng JSONB
+// 2. CHUẨN HÓA DANH SÁCH TỪ CŨ
 // =====================================================
 
 const normalizeWords = (words) => {
@@ -34,9 +33,7 @@ const normalizeWords = (words) => {
                 ? item
                 : item?.word;
 
-        if (typeof rawWord !== "string") {
-            continue;
-        }
+        if (typeof rawWord !== "string") continue;
 
         const word = rawWord
             .normalize("NFC")
@@ -45,7 +42,6 @@ const normalizeWords = (words) => {
 
         const normalizedWord = normalizeWord(word);
 
-        // Bỏ từ rỗng và từ trùng
         if (
             !word ||
             !normalizedWord ||
@@ -63,7 +59,7 @@ const normalizeWords = (words) => {
         });
     }
 
-    if (result.length === 0) {
+    if (!result.length) {
         throw new Error(
             "Danh sách từ không có dữ liệu hợp lệ."
         );
@@ -79,8 +75,124 @@ const normalizeWords = (words) => {
 };
 
 // =====================================================
-// 3. LẤY DANH SÁCH BỘ TỪ CÓ THỂ CHƠI
-// GET /api/word-chain/sets
+// 3. CHUẨN HÓA DỮ LIỆU GHÉP NỐI
+// =====================================================
+
+const normalizeMatchingData = (gameData) => {
+    if (
+        !gameData ||
+        typeof gameData !== "object" ||
+        !Array.isArray(gameData.questions) ||
+        !Array.isArray(gameData.options)
+    ) {
+        throw new Error(
+            "Dữ liệu game ghép nối không hợp lệ."
+        );
+    }
+
+    if (
+        gameData.questions.length === 0 ||
+        gameData.options.length === 0
+    ) {
+        throw new Error(
+            "Bộ ghép nối phải có câu hỏi và phương án."
+        );
+    }
+
+    if (
+        gameData.questions.length > 1000 ||
+        gameData.options.length > 1000
+    ) {
+        throw new Error(
+            "Bộ ghép nối không được vượt quá 1000 câu hoặc phương án."
+        );
+    }
+
+    const optionKeys = new Set();
+
+    const options = gameData.options.map((item) => {
+        const optionKey = String(
+            item?.option_key || ""
+        ).trim().toUpperCase();
+
+        const rightText = String(
+            item?.right_text || ""
+        ).normalize("NFC").trim();
+
+        if (!optionKey || !rightText) {
+            throw new Error(
+                "Phương án ghép nối không hợp lệ."
+            );
+        }
+
+        if (optionKeys.has(optionKey)) {
+            throw new Error(
+                `Mã phương án ${optionKey} bị trùng.`
+            );
+        }
+
+        optionKeys.add(optionKey);
+
+        return {
+            option_key: optionKey,
+            right_text: rightText,
+        };
+    });
+
+    const questionIds = new Set();
+
+    const questions = gameData.questions.map((item, index) => {
+        const id = item?.id ?? index + 1;
+
+        const leftText = String(
+            item?.left_text || ""
+        ).normalize("NFC").trim();
+
+        const correctKey = String(
+            item?.correct_option_key || ""
+        ).trim().toUpperCase();
+
+        if (!leftText || !correctKey) {
+            throw new Error(
+                `Câu hỏi thứ ${index + 1} không hợp lệ.`
+            );
+        }
+
+        if (questionIds.has(String(id))) {
+            throw new Error(
+                `ID câu hỏi ${id} bị trùng.`
+            );
+        }
+
+        if (
+            correctKey !== "0" &&
+            !optionKeys.has(correctKey)
+        ) {
+            throw new Error(
+                `Câu ${id} có đáp án ${correctKey} không tồn tại.`
+            );
+        }
+
+        questionIds.add(String(id));
+
+        return {
+            id,
+            left_text: leftText,
+            correct_option_key: correctKey,
+        };
+    });
+
+    return {
+        game_type: "MATCHING",
+        questions,
+        options,
+        total_questions: questions.length,
+        total_options: options.length,
+    };
+};
+
+// =====================================================
+// 4. LẤY DANH SÁCH BỘ TỪ ĐÃ APPROVED
 // =====================================================
 
 const getApprovedWordSets = async () => {
@@ -112,13 +224,12 @@ const getApprovedWordSets = async () => {
 };
 
 // =====================================================
-// 4. LẤY CHI TIẾT BỘ TỪ
-// GET /api/word-chain/sets/:id
+// 5. LẤY CHI TIẾT BỘ DỮ LIỆU
 // =====================================================
 
 const getWordSetById = async (id) => {
     if (!id) {
-        throw new Error("Thiếu ID bộ từ.");
+        throw new Error("Thiếu ID bộ dữ liệu.");
     }
 
     const { data, error } = await supabase
@@ -138,66 +249,82 @@ const getWordSetById = async (id) => {
     }
 
     if (!data) {
-        throw new Error(
-            "Không tìm thấy bộ từ."
-        );
+        throw new Error("Không tìm thấy bộ dữ liệu.");
     }
 
     return data;
 };
 
 // =====================================================
-// 5. LẤY BỘ TỪ CHO HOST TẠO PHÒNG RENDER
+// 6. LẤY DỮ LIỆU CHO HOST TẠO PHÒNG
+// Hỗ trợ cả bộ từ cũ và ghép nối mới
 // =====================================================
 
 const getWordSetForHost = async (id) => {
     const data = await getWordSetById(id);
 
+    // Dữ liệu ghép nối mới
+    if (
+        data.words &&
+        !Array.isArray(data.words) &&
+        data.words.game_type === "MATCHING"
+    ) {
+        const matchingData = normalizeMatchingData(
+            data.words
+        );
+
+        return {
+            id: data.id,
+            title: data.title,
+            game_type: "MATCHING",
+            total_questions: matchingData.total_questions,
+            total_options: matchingData.total_options,
+            questions: matchingData.questions,
+            options: matchingData.options,
+        };
+    }
+
+    // Dữ liệu nối từ cũ
     const words = normalizeWords(data.words);
 
     return {
         id: data.id,
         title: data.title,
+        game_type: "WORD_CHAIN",
         total_words: words.length,
         words,
     };
 };
 
 // =====================================================
-// 6. TẠO BỘ TỪ MỚI
-// Upload thành công là APPROVED ngay
-// Một bộ từ = một dòng JSONB
+// 7. TẠO BỘ DỮ LIỆU
+// Một bộ = một dòng JSONB
 // =====================================================
 
 const createWordSet = async ({
     title,
     description,
     uploaderId,
-    words,
+    gameData,
 }) => {
-    // Kiểm tra tên bộ từ
     if (
         !title ||
         typeof title !== "string" ||
         !title.trim()
     ) {
-        throw new Error(
-            "Tên bộ từ không hợp lệ."
-        );
+        throw new Error("Tên bộ dữ liệu không hợp lệ.");
     }
 
     const cleanTitle = title.trim();
 
     if (cleanTitle.length > 255) {
         throw new Error(
-            "Tên bộ từ không được vượt quá 255 ký tự."
+            "Tên bộ dữ liệu không được vượt quá 255 ký tự."
         );
     }
 
-    // Chuẩn hóa danh sách từ
-    const normalizedWords = normalizeWords(words);
+    const normalizedData = normalizeMatchingData(gameData);
 
-    // Dữ liệu lưu Supabase
     const payload = {
         title: cleanTitle,
 
@@ -209,13 +336,12 @@ const createWordSet = async ({
 
         uploader_id: uploaderId || null,
 
-        // Không cần chờ ADMIN duyệt
         status: "APPROVED",
 
-        total_words: normalizedWords.length,
+        total_words: normalizedData.total_questions,
 
-        // Lưu toàn bộ danh sách vào JSONB
-        words: normalizedWords,
+        // JSONB chứa toàn bộ câu hỏi và phương án
+        words: normalizedData,
     };
 
     const { data, error } = await supabase
@@ -233,7 +359,7 @@ const createWordSet = async ({
 
     if (error) {
         console.error(
-            "SUPABASE CREATE WORD SET ERROR:",
+            "SUPABASE CREATE MATCHING SET ERROR:",
             error
         );
 
@@ -242,22 +368,25 @@ const createWordSet = async ({
 
     if (!data) {
         throw new Error(
-            "Supabase không trả về dữ liệu bộ từ vừa tạo."
+            "Supabase không trả về bộ dữ liệu vừa tạo."
         );
     }
 
-    return data;
+    return {
+        ...data,
+        game_type: "MATCHING",
+        total_questions: normalizedData.total_questions,
+        total_options: normalizedData.total_options,
+    };
 };
 
 // =====================================================
-// 7. XÓA BỘ TỪ
+// 8. XÓA BỘ DỮ LIỆU
 // =====================================================
 
 const deleteWordSet = async (id) => {
     if (!id) {
-        throw new Error(
-            "Thiếu ID bộ từ cần xóa."
-        );
+        throw new Error("Thiếu ID bộ dữ liệu cần xóa.");
     }
 
     const { data, error } = await supabase
@@ -278,7 +407,7 @@ const deleteWordSet = async (id) => {
 
     if (!data) {
         throw new Error(
-            "Bộ từ không tồn tại hoặc không thể xóa."
+            "Bộ dữ liệu không tồn tại hoặc không thể xóa."
         );
     }
 
@@ -290,6 +419,9 @@ const deleteWordSet = async (id) => {
 // =====================================================
 
 module.exports = {
+    normalizeWord,
+    normalizeWords,
+    normalizeMatchingData,
     getApprovedWordSets,
     getWordSetById,
     getWordSetForHost,
