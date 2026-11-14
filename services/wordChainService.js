@@ -11,7 +11,7 @@ const MAX_OPTIONS = 1000;
 // =====================================================
 
 const normalizeWord = (word) => {
-    return String(word || "")
+    return String(word ?? "")
         .normalize("NFC")
         .trim()
         .replace(/\s+/g, " ")
@@ -62,7 +62,7 @@ const normalizeWords = (words) => {
         });
     }
 
-    if (!result.length) {
+    if (result.length < 1) {
         throw new Error(
             "Danh sách từ không có dữ liệu hợp lệ."
         );
@@ -85,22 +85,27 @@ const normalizeMatchingData = (gameData) => {
     if (
         !gameData ||
         typeof gameData !== "object" ||
-        gameData.game_type !== "MATCHING" ||
-        !Array.isArray(gameData.questions) ||
-        !Array.isArray(gameData.options)
+        Array.isArray(gameData) ||
+        gameData.game_type !== "MATCHING"
     ) {
         throw new Error(
             "Dữ liệu game ghép nối không hợp lệ."
         );
     }
 
-    if (gameData.questions.length < 1) {
+    if (
+        !Array.isArray(gameData.questions) ||
+        gameData.questions.length < 1
+    ) {
         throw new Error(
             "Quiz cần có ít nhất một câu hỏi."
         );
     }
 
-    if (gameData.options.length < 1) {
+    if (
+        !Array.isArray(gameData.options) ||
+        gameData.options.length < 1
+    ) {
         throw new Error(
             "Quiz cần có ít nhất một đáp án."
         );
@@ -132,10 +137,7 @@ const normalizeMatchingData = (gameData) => {
             .trim()
             .replace(/\s+/g, " ");
 
-        if (
-            !optionKey ||
-            !rightText
-        ) {
+        if (!optionKey || !rightText) {
             throw new Error(
                 `Phương án thứ ${index + 1} không hợp lệ.`
             );
@@ -212,19 +214,19 @@ const normalizeMatchingData = (gameData) => {
 
         if (
             correctKey !== "0" &&
-            !optionKeys.has(correctKey)
+            !/^[A-Z0-9]+$/.test(correctKey)
         ) {
             throw new Error(
-                `Câu ${id} có đáp án ${correctKey} không tồn tại.`
+                `Mã đáp án của câu ${id} không hợp lệ.`
             );
         }
 
         if (
             correctKey !== "0" &&
-            !/^[A-Z0-9]+$/.test(correctKey)
+            !optionKeys.has(correctKey)
         ) {
             throw new Error(
-                `Mã đáp án của câu ${id} không hợp lệ.`
+                `Câu ${id} có đáp án ${correctKey} không tồn tại.`
             );
         }
 
@@ -304,7 +306,9 @@ const getWordSetById = async (id) => {
     }
 
     if (!data) {
-        throw new Error("Không tìm thấy bộ dữ liệu.");
+        throw new Error(
+            "Không tìm thấy bộ dữ liệu."
+        );
     }
 
     return data;
@@ -312,7 +316,6 @@ const getWordSetById = async (id) => {
 
 // =====================================================
 // 6. LẤY DỮ LIỆU CHO HOST TẠO PHÒNG
-// Hỗ trợ dữ liệu cũ và ghép nối mới
 // =====================================================
 
 const getWordSetForHost = async (id) => {
@@ -339,7 +342,13 @@ const getWordSetForHost = async (id) => {
         };
     }
 
-    // Dữ liệu nối từ cũ
+    // Dữ liệu cũ không được dùng để tạo phòng ghép nối
+    if (!Array.isArray(data.words)) {
+        throw new Error(
+            "Bộ dữ liệu không đúng định dạng ghép nối."
+        );
+    }
+
     const words = normalizeWords(data.words);
 
     return {
@@ -367,7 +376,9 @@ const createWordSet = async ({
         typeof title !== "string" ||
         !title.trim()
     ) {
-        throw new Error("Tên bộ dữ liệu không hợp lệ.");
+        throw new Error(
+            "Tên bộ dữ liệu không hợp lệ."
+        );
     }
 
     const cleanTitle = title.trim();
@@ -395,7 +406,7 @@ const createWordSet = async ({
 
         total_words: normalizedData.total_questions,
 
-        // Toàn bộ câu hỏi và phương án nằm trong JSONB
+        // Toàn bộ câu hỏi và phương án lưu trong JSONB
         words: normalizedData,
     };
 
@@ -441,7 +452,9 @@ const createWordSet = async ({
 
 const deleteWordSet = async (id) => {
     if (!id) {
-        throw new Error("Thiếu ID bộ dữ liệu cần xóa.");
+        throw new Error(
+            "Thiếu ID bộ dữ liệu cần xóa."
+        );
     }
 
     const { data, error } = await supabase
