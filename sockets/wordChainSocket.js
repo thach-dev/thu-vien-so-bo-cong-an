@@ -323,6 +323,19 @@ module.exports = function registerWordChainSocket(io) {
     // ==========================================
 
     io.on("connection", (socket) => {
+    console.log("[MATCHING] CLIENT CONNECTED:", {
+        socketId: socket.id,
+        userId: socket.data.userId,
+        transport: socket.conn.transport.name,
+    });
+
+    socket.onAny((event) => {
+        console.log("[MATCHING] EVENT RECEIVED:", {
+            event,
+            socketId: socket.id,
+            userId: socket.data.userId,
+        });
+    });
         socket.onAny((event, ...args) => {
             console.log("[SOCKET EVENT RECEIVED]", {
                 event,
@@ -336,7 +349,99 @@ module.exports = function registerWordChainSocket(io) {
         // ======================================
 
         socket.on(
-            "matching:host:create",
+    "matching:host:create",
+    async (data = {}, callback = () => {}) => {
+        const wordSetId = data?.wordSetId;
+
+        console.log("[MATCHING] CREATE REQUEST RECEIVED:", {
+            socketId: socket.id,
+            userId: socket.data.userId,
+            wordSetId,
+        });
+
+        try {
+            // 1. Kiểm tra đăng nhập
+            if (!socket.data.userId) {
+                throw new Error("Socket chưa được xác thực.");
+            }
+
+            // 2. Kiểm tra ID bộ dữ liệu
+            if (!wordSetId) {
+                throw new Error("Vui lòng chọn bộ dữ liệu.");
+            }
+
+            // 3. Lấy bộ dữ liệu từ Supabase
+            console.log("[MATCHING] STEP 1: GET WORD SET");
+
+            const wordSet =
+                await wordChainService.getWordSetForHost(wordSetId);
+
+            console.log("[MATCHING] STEP 2: WORD SET LOADED", {
+                found: !!wordSet,
+                title: wordSet?.title,
+                gameType: wordSet?.game_type,
+                questions: wordSet?.questions?.length,
+                options: wordSet?.options?.length,
+            });
+
+            // 4. Kiểm tra dữ liệu
+            const validated = validateWordSet(wordSet);
+
+            console.log("[MATCHING] STEP 3: VALIDATION SUCCESS");
+
+            // 5. Tạo phòng
+            const pin = makePin();
+
+            const room = {
+                pin,
+                title: wordSet.title,
+                wordSetId,
+                hostSocketId: socket.id,
+                players: new Map(),
+                questions: shuffle(validated.questions),
+                options: shuffle(validated.options),
+                started: false,
+                finished: false,
+            };
+
+            rooms.set(pin, room);
+
+            // 6. Cho chủ phòng tham gia room
+            await socket.join(pin);
+
+            socket.data.matchingHostPin = pin;
+
+            console.log("[MATCHING] STEP 4: ROOM CREATED", {
+                pin,
+                title: room.title,
+                totalQuestions: room.questions.length,
+                totalOptions: room.options.length,
+            });
+
+            // 7. Trả kết quả về frontend
+            callback({
+                ok: true,
+                pin,
+                title: room.title,
+                totalQuestions: room.questions.length,
+                totalOptions: room.options.length,
+            });
+
+        } catch (error) {
+            console.error("[MATCHING] CREATE ROOM FAILED:", {
+                message: error.message,
+                stack: error.stack,
+                wordSetId,
+                socketId: socket.id,
+            });
+
+            callback({
+                ok: false,
+                message: error.message || "Không thể tạo phòng.",
+            });
+        }
+    }
+);
             async ({ wordSetId } = {}, callback = () => {}) => {
 
                 console.log("[MATCHING] RECEIVED CREATE EVENT:", {
