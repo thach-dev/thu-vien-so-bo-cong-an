@@ -323,6 +323,13 @@ module.exports = function registerWordChainSocket(io) {
     // ==========================================
 
     io.on("connection", (socket) => {
+        socket.onAny((event, ...args) => {
+            console.log("[SOCKET EVENT RECEIVED]", {
+                event,
+                socketId: socket.id,
+                userId: socket.data.userId,
+            });
+        });
 
         // ======================================
         // 1. CHỦ PHÒNG TẠO PHÒNG
