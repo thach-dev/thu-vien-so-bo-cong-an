@@ -58,7 +58,7 @@ module.exports = function registerWordChainSocket(io) {
             wordSet.questions.length < 1
         ) {
             throw new Error(
-                "Quiz cần có ít nhất một câu hỏi."
+                "Bộ dữ liệu cần có ít nhất một câu hỏi."
             );
         }
 
@@ -67,7 +67,7 @@ module.exports = function registerWordChainSocket(io) {
             wordSet.options.length < 1
         ) {
             throw new Error(
-                "Quiz cần có ít nhất một đáp án."
+                "Bộ dữ liệu cần có ít nhất một đáp án."
             );
         }
 
@@ -85,7 +85,9 @@ module.exports = function registerWordChainSocket(io) {
 
         const questions = wordSet.questions.map(
             (question, index) => {
-                const id = String(question?.id ?? "").trim();
+                const id = String(
+                    question?.id ?? ""
+                ).trim();
 
                 const leftText = String(
                     question?.left_text ?? ""
@@ -167,7 +169,7 @@ module.exports = function registerWordChainSocket(io) {
 
     // ==========================================
     // DỮ LIỆU CÔNG KHAI GỬI CHO NGƯỜI CHƠI
-    // Không gửi đáp án đúng
+    // KHÔNG GỬI ĐÁP ÁN ĐÚNG
     // ==========================================
 
     function getPublicGameData(room) {
@@ -219,15 +221,15 @@ module.exports = function registerWordChainSocket(io) {
         const details = room.questions.map((question) => {
             const submittedKey = String(
                 answers?.[question.id] ?? ""
-            ).trim();
+            ).trim().toUpperCase();
 
             const correctKey = String(
                 question.correct_option_key
-            );
+            ).toUpperCase();
 
             const isCorrect = submittedKey === correctKey;
 
-            if (!submittedKey) {
+            if (!submittedKey || submittedKey === "0") {
                 unanswered++;
             } else if (isCorrect) {
                 correct++;
@@ -323,21 +325,15 @@ module.exports = function registerWordChainSocket(io) {
     // ==========================================
 
     io.on("connection", (socket) => {
-    console.log("[MATCHING] CLIENT CONNECTED:", {
-        socketId: socket.id,
-        userId: socket.data.userId,
-        transport: socket.conn.transport.name,
-    });
-
-    socket.onAny((event) => {
-        console.log("[MATCHING] EVENT RECEIVED:", {
-            event,
+        console.log("[MATCHING] CLIENT CONNECTED:", {
             socketId: socket.id,
             userId: socket.data.userId,
+            transport: socket.conn.transport.name,
         });
-    });
-        socket.onAny((event, ...args) => {
-            console.log("[SOCKET EVENT RECEIVED]", {
+
+        // Theo dõi sự kiện Socket từ frontend
+        socket.onAny((event) => {
+            console.log("[MATCHING] EVENT RECEIVED:", {
                 event,
                 socketId: socket.id,
                 userId: socket.data.userId,
@@ -349,106 +345,18 @@ module.exports = function registerWordChainSocket(io) {
         // ======================================
 
         socket.on(
-    "matching:host:create",
-    async (data = {}, callback = () => {}) => {
-        const wordSetId = data?.wordSetId;
+            "matching:host:create",
+            async (data = {}, callback = () => {}) => {
+                const wordSetId = data?.wordSetId;
 
-        console.log("[MATCHING] CREATE REQUEST RECEIVED:", {
-            socketId: socket.id,
-            userId: socket.data.userId,
-            wordSetId,
-        });
-
-        try {
-            // 1. Kiểm tra đăng nhập
-            if (!socket.data.userId) {
-                throw new Error("Socket chưa được xác thực.");
-            }
-
-            // 2. Kiểm tra ID bộ dữ liệu
-            if (!wordSetId) {
-                throw new Error("Vui lòng chọn bộ dữ liệu.");
-            }
-
-            // 3. Lấy bộ dữ liệu từ Supabase
-            console.log("[MATCHING] STEP 1: GET WORD SET");
-
-            const wordSet =
-                await wordChainService.getWordSetForHost(wordSetId);
-
-            console.log("[MATCHING] STEP 2: WORD SET LOADED", {
-                found: !!wordSet,
-                title: wordSet?.title,
-                gameType: wordSet?.game_type,
-                questions: wordSet?.questions?.length,
-                options: wordSet?.options?.length,
-            });
-
-            // 4. Kiểm tra dữ liệu
-            const validated = validateWordSet(wordSet);
-
-            console.log("[MATCHING] STEP 3: VALIDATION SUCCESS");
-
-            // 5. Tạo phòng
-            const pin = makePin();
-
-            const room = {
-                pin,
-                title: wordSet.title,
-                wordSetId,
-                hostSocketId: socket.id,
-                players: new Map(),
-                questions: shuffle(validated.questions),
-                options: shuffle(validated.options),
-                started: false,
-                finished: false,
-            };
-
-            rooms.set(pin, room);
-
-            // 6. Cho chủ phòng tham gia room
-            await socket.join(pin);
-
-            socket.data.matchingHostPin = pin;
-
-            console.log("[MATCHING] STEP 4: ROOM CREATED", {
-                pin,
-                title: room.title,
-                totalQuestions: room.questions.length,
-                totalOptions: room.options.length,
-            });
-
-            // 7. Trả kết quả về frontend
-            callback({
-                ok: true,
-                pin,
-                title: room.title,
-                totalQuestions: room.questions.length,
-                totalOptions: room.options.length,
-            });
-
-        } catch (error) {
-            console.error("[MATCHING] CREATE ROOM FAILED:", {
-                message: error.message,
-                stack: error.stack,
-                wordSetId,
-                socketId: socket.id,
-            });
-
-            callback({
-                ok: false,
-                message: error.message || "Không thể tạo phòng.",
-            });
-        }
-    }
-);
-            async ({ wordSetId } = {}, callback = () => {}) => {
-
-                console.log("[MATCHING] RECEIVED CREATE EVENT:", {
-                    socketId: socket.id,
-                    userId: socket.data.userId,
-                    wordSetId,
-                });
+                console.log(
+                    "[MATCHING] CREATE REQUEST RECEIVED:",
+                    {
+                        socketId: socket.id,
+                        userId: socket.data.userId,
+                        wordSetId,
+                    }
+                );
 
                 try {
                     if (!socket.data.userId) {
@@ -463,12 +371,31 @@ module.exports = function registerWordChainSocket(io) {
                         );
                     }
 
+                    console.log(
+                        "[MATCHING] STEP 1: GET WORD SET"
+                    );
+
                     const wordSet =
                         await wordChainService.getWordSetForHost(
                             wordSetId
                         );
 
+                    console.log(
+                        "[MATCHING] STEP 2: WORD SET LOADED",
+                        {
+                            found: !!wordSet,
+                            title: wordSet?.title,
+                            gameType: wordSet?.game_type,
+                            questions: wordSet?.questions?.length,
+                            options: wordSet?.options?.length,
+                        }
+                    );
+
                     const validated = validateWordSet(wordSet);
+
+                    console.log(
+                        "[MATCHING] STEP 3: VALIDATION SUCCESS"
+                    );
 
                     const pin = makePin();
 
@@ -476,28 +403,29 @@ module.exports = function registerWordChainSocket(io) {
                         pin,
                         title: wordSet.title,
                         wordSetId,
-
                         hostSocketId: socket.id,
-
                         players: new Map(),
-
-                        questions: shuffle(
-                            validated.questions
-                        ),
-
-                        options: shuffle(
-                            validated.options
-                        ),
-
+                        questions: shuffle(validated.questions),
+                        options: shuffle(validated.options),
                         started: false,
                         finished: false,
                     };
 
                     rooms.set(pin, room);
 
-                    socket.join(pin);
+                    await socket.join(pin);
 
                     socket.data.matchingHostPin = pin;
+
+                    console.log(
+                        "[MATCHING] STEP 4: ROOM CREATED",
+                        {
+                            pin,
+                            title: room.title,
+                            totalQuestions: room.questions.length,
+                            totalOptions: room.options.length,
+                        }
+                    );
 
                     callback({
                         ok: true,
@@ -506,15 +434,15 @@ module.exports = function registerWordChainSocket(io) {
                         totalQuestions: room.questions.length,
                         totalOptions: room.options.length,
                     });
-
-                    console.log(
-                        `[MATCHING] Room ${pin} created by ${socket.id}`
-                    );
-
                 } catch (error) {
                     console.error(
-                        "[MATCHING] Create room error:",
-                        error
+                        "[MATCHING] CREATE ROOM FAILED:",
+                        {
+                            message: error.message,
+                            stack: error.stack,
+                            wordSetId,
+                            socketId: socket.id,
+                        }
                     );
 
                     callback({
@@ -533,7 +461,10 @@ module.exports = function registerWordChainSocket(io) {
 
         socket.on(
             "matching:player:join",
-            ({ pin, nickname } = {}, callback = () => {}) => {
+            async (
+                { pin, nickname } = {},
+                callback = () => {}
+            ) => {
                 pin = String(pin || "").trim();
 
                 nickname = String(nickname || "")
@@ -552,7 +483,8 @@ module.exports = function registerWordChainSocket(io) {
                 if (room.started || room.finished) {
                     return callback({
                         ok: false,
-                        message: "Trận đấu đã bắt đầu hoặc kết thúc.",
+                        message:
+                            "Trận đấu đã bắt đầu hoặc kết thúc.",
                     });
                 }
 
@@ -584,7 +516,7 @@ module.exports = function registerWordChainSocket(io) {
 
                 room.players.set(socket.id, player);
 
-                socket.join(pin);
+                await socket.join(pin);
 
                 socket.data.matchingPlayerPin = pin;
 
@@ -616,35 +548,40 @@ module.exports = function registerWordChainSocket(io) {
                 ) {
                     return callback({
                         ok: false,
-                        message: "Không có quyền điều khiển phòng.",
+                        message:
+                            "Không có quyền điều khiển phòng.",
                     });
                 }
 
                 if (room.started || room.finished) {
                     return callback({
                         ok: false,
-                        message: "Trận đấu đã bắt đầu hoặc kết thúc.",
+                        message:
+                            "Trận đấu đã bắt đầu hoặc kết thúc.",
                     });
                 }
 
                 if (room.questions.length < 1) {
                     return callback({
                         ok: false,
-                        message: "Quiz cần có ít nhất một câu hỏi.",
+                        message:
+                            "Bộ dữ liệu cần có ít nhất một câu hỏi.",
                     });
                 }
 
                 if (room.options.length < 1) {
                     return callback({
                         ok: false,
-                        message: "Quiz cần có ít nhất một đáp án.",
+                        message:
+                            "Bộ dữ liệu cần có ít nhất một đáp án.",
                     });
                 }
 
                 if (room.players.size < 1) {
                     return callback({
                         ok: false,
-                        message: "Cần ít nhất một người chơi.",
+                        message:
+                            "Cần ít nhất một người chơi.",
                     });
                 }
 
@@ -671,7 +608,10 @@ module.exports = function registerWordChainSocket(io) {
 
         socket.on(
             "matching:player:submit",
-            ({ pin, answers } = {}, callback = () => {}) => {
+            (
+                { pin, answers } = {},
+                callback = () => {}
+            ) => {
                 const room = rooms.get(
                     String(pin || "").trim()
                 );
@@ -711,29 +651,41 @@ module.exports = function registerWordChainSocket(io) {
                 ) {
                     return callback({
                         ok: false,
-                        message: "Dữ liệu ghép nối không hợp lệ.",
+                        message:
+                            "Dữ liệu ghép nối không hợp lệ.",
                     });
                 }
 
                 const validQuestionIds = new Set(
-                    room.questions.map((question) => question.id)
+                    room.questions.map(
+                        (question) => question.id
+                    )
                 );
 
                 const validOptionKeys = new Set(
-                    room.options.map((option) => option.option_key)
+                    room.options.map(
+                        (option) => option.option_key
+                    )
                 );
 
-                for (const [questionId, optionKey] of Object.entries(
-                    answers
-                )) {
-                    if (!validQuestionIds.has(String(questionId))) {
+                for (const [
+                    questionId,
+                    optionKey,
+                ] of Object.entries(answers)) {
+                    if (
+                        !validQuestionIds.has(
+                            String(questionId)
+                        )
+                    ) {
                         return callback({
                             ok: false,
                             message: "Có câu hỏi không hợp lệ.",
                         });
                     }
 
-                    const selected = String(optionKey);
+                    const selected = String(
+                        optionKey
+                    ).trim().toUpperCase();
 
                     if (
                         selected !== "0" &&
@@ -746,7 +698,10 @@ module.exports = function registerWordChainSocket(io) {
                     }
                 }
 
-                const result = calculateResult(room, answers);
+                const result = calculateResult(
+                    room,
+                    answers
+                );
 
                 player.submitted = true;
                 player.score = result.score;
@@ -795,7 +750,8 @@ module.exports = function registerWordChainSocket(io) {
                 ) {
                     return callback({
                         ok: false,
-                        message: "Không có quyền kết thúc trận.",
+                        message:
+                            "Không có quyền kết thúc trận.",
                     });
                 }
 
@@ -856,21 +812,22 @@ module.exports = function registerWordChainSocket(io) {
                 ) {
                     return callback({
                         ok: false,
-                        message: "Không có quyền đóng phòng.",
+                        message:
+                            "Không có quyền đóng phòng.",
                     });
                 }
 
                 io.to(room.pin).emit(
                     "matching:room:closed",
                     {
-                        message: "Chủ phòng đã đóng phòng.",
+                        message:
+                            "Chủ phòng đã đóng phòng.",
                     }
                 );
 
                 for (const player of room.players.values()) {
-                    const playerSocket = io.sockets.sockets.get(
-                        player.id
-                    );
+                    const playerSocket =
+                        io.sockets.sockets.get(player.id);
 
                     if (playerSocket) {
                         playerSocket.data.matchingPlayerPin = null;
@@ -893,7 +850,8 @@ module.exports = function registerWordChainSocket(io) {
         // ======================================
 
         socket.on("disconnect", () => {
-            const playerPin = socket.data.matchingPlayerPin;
+            const playerPin =
+                socket.data.matchingPlayerPin;
 
             const playerRoom = rooms.get(playerPin);
 
@@ -908,7 +866,8 @@ module.exports = function registerWordChainSocket(io) {
                 checkAllSubmitted(playerRoom);
             }
 
-            const hostPin = socket.data.matchingHostPin;
+            const hostPin =
+                socket.data.matchingHostPin;
 
             const hostRoom = rooms.get(hostPin);
 
@@ -919,14 +878,14 @@ module.exports = function registerWordChainSocket(io) {
                 io.to(hostRoom.pin).emit(
                     "matching:room:closed",
                     {
-                        message: "Chủ phòng đã mất kết nối.",
+                        message:
+                            "Chủ phòng đã mất kết nối.",
                     }
                 );
 
                 for (const player of hostRoom.players.values()) {
-                    const playerSocket = io.sockets.sockets.get(
-                        player.id
-                    );
+                    const playerSocket =
+                        io.sockets.sockets.get(player.id);
 
                     if (playerSocket) {
                         playerSocket.data.matchingPlayerPin = null;
