@@ -107,7 +107,21 @@ registerQuizSocket(io);
 const registerWordChainSocket = require("./sockets/wordChainSocket");
 
 registerWordChainSocket(io);
+// DEBUG: KIỂM TRA SOCKET CONNECTION TOÀN SERVER
+io.on("connection", (socket) => {
+    console.log("[APP] SOCKET CONNECTED:", {
+        socketId: socket.id,
+        userId: socket.data.userId,
+        transport: socket.conn.transport.name,
+    });
 
+    socket.onAny((event) => {
+        console.log("[APP] SOCKET EVENT:", {
+            event,
+            socketId: socket.id,
+        });
+    });
+});
 // =====================================================
 // EXPORT
 // =====================================================
