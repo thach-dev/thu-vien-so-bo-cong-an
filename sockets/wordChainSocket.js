@@ -331,6 +331,13 @@ module.exports = function registerWordChainSocket(io) {
         socket.on(
             "matching:host:create",
             async ({ wordSetId } = {}, callback = () => {}) => {
+
+                console.log("[MATCHING] RECEIVED CREATE EVENT:", {
+                    socketId: socket.id,
+                    userId: socket.data.userId,
+                    wordSetId,
+                });
+
                 try {
                     if (!socket.data.userId) {
                         throw new Error(
